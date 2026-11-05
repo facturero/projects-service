@@ -1,0 +1,1742 @@
+openapi: 3.0.3
+info:
+  title: projects-service
+  version: 1.0.0
+  description: >
+    Proyectos y tareas al estilo Asana (entregables 1 a 7): proyectos de toda la organización o privados, miembros con rol dentro del
+    proyecto (admin, editor, comentarista, lector), secciones, tareas y subtareas, lista, tablero y Mis tareas.
+
+    Todas las rutas pasan por el gateway (`ANY /projects/*`, módulo `projects.tasks_kanban`, permiso `project:read`), que inyecta
+    `X-Organization-Id`, `X-User-Id` y `X-Permissions`. Lo demás lo decide el rol del usuario en cada proyecto. Un proyecto o una tarea
+    que el usuario no puede ver responde 404, nunca 403: no se revela que existe.
+
+    Concurrencia: proyectos y tareas llevan `version`. Editar o mover con una versión vieja responde 409 `VERSION_CONFLICT` con
+    `currentVersion`; el cliente recarga en vez de pisar el cambio de otra persona.
+servers:
+  - url: http://localhost:3020
+paths:
+  /health:
+    get:
+      summary: Salud del servicio
+      security: []
+      responses:
+        '200': { description: OK }
+
+  /projects:
+    get:
+      summary: Proyectos visibles para quien pregunta, con su rol en cada uno
+      parameters:
+        - { in: query, name: status, schema: { type: string, enum: [active, archived], default: active } }
+      responses:
+        '200':
+          description: Lista ordenada por nombre
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ProjectWithRole' } }
+    post:
+      summary: Crear un proyecto (exige `project:create`); quien lo crea queda como su administrador
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateProject' }
+      responses:
+        '201': { description: Creado, content: { application/json: { schema: { $ref: '#/components/schemas/ProjectDetail' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /projects/my-tasks:
+    get:
+      summary: Mis tareas — lo asignado a mí y mis tareas personales sin proyecto
+      description: La agrupación (Recién asignadas, Hoy, Próximas, Más tarde) la hace el cliente con su fecha local.
+      parameters:
+        - { in: query, name: includeCompleted, schema: { type: boolean, default: false } }
+      responses:
+        '200':
+          description: Tareas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/MyTask' } }
+
+  /projects/{projectId}:
+    parameters: [{ $ref: '#/components/parameters/projectId' }]
+    get:
+      summary: Proyecto con sus miembros y el rol de quien pregunta
+      responses:
+        '200': { description: Proyecto, content: { application/json: { schema: { $ref: '#/components/schemas/ProjectDetail' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      summary: Cambiar nombre, descripción, color, icono, visibilidad o vista por defecto (admin del proyecto)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateProject' }
+      responses:
+        '200': { description: Proyecto, content: { application/json: { schema: { $ref: '#/components/schemas/Project' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      summary: Enviar el proyecto a la papelera (admin del proyecto)
+      responses:
+        '204': { description: Borrado }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /projects/{projectId}/archive:
+    parameters: [{ $ref: '#/components/parameters/projectId' }]
+    post:
+      summary: Archivar (queda de solo lectura hasta desarchivarlo)
+      responses:
+        '200': { description: Proyecto, content: { application/json: { schema: { $ref: '#/components/schemas/Project' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /projects/{projectId}/unarchive:
+    parameters: [{ $ref: '#/components/parameters/projectId' }]
+    post:
+      summary: Desarchivar
+      responses:
+        '200': { description: Proyecto, content: { application/json: { schema: { $ref: '#/components/schemas/Project' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /projects/{projectId}/tasks:
+    parameters: [{ $ref: '#/components/parameters/projectId' }]
+    get:
+      summary: Secciones y tareas raíz del proyecto (alimenta la lista y el tablero)
+      responses:
+        '200': { description: Tablero, content: { application/json: { schema: { $ref: '#/components/schemas/Board' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /projects/{projectId}/members:
+    parameters: [{ $ref: '#/components/parameters/projectId' }]
+    get:
+      summary: Miembros del proyecto
+      responses:
+        '200':
+          description: Miembros
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Member' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      summary: Sumar a alguien al proyecto («Compartir»; admin del proyecto)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, role]
+              properties:
+                userId: { type: string, format: uuid }
+                role: { $ref: '#/components/schemas/ProjectRole' }
+      responses:
+        '201': { description: Miembro, content: { application/json: { schema: { $ref: '#/components/schemas/Member' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /projects/{projectId}/members/{userId}:
+    parameters:
+      - { $ref: '#/components/parameters/projectId' }
+      - { in: path, name: userId, required: true, schema: { type: string, format: uuid } }
+    patch:
+      summary: Cambiar el rol de un miembro (el proyecto nunca se queda sin administrador)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { $ref: '#/components/schemas/ProjectRole' }
+      responses:
+        '200': { description: Miembro, content: { application/json: { schema: { $ref: '#/components/schemas/Member' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      summary: Quitar a un miembro (admin), o salirse uno mismo (cualquiera)
+      responses:
+        '204': { description: Quitado }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /projects/{projectId}/sections:
+    parameters: [{ $ref: '#/components/parameters/projectId' }]
+    post:
+      summary: Crear una sección (editor); sin posición va al final
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - type: object
+                  required: [name]
+                  properties:
+                    name: { type: string, maxLength: 120 }
+                - $ref: '#/components/schemas/Position'
+      responses:
+        '201': { description: Sección, content: { application/json: { schema: { $ref: '#/components/schemas/Section' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /projects/{projectId}/sections/{sectionId}:
+    parameters:
+      - { $ref: '#/components/parameters/projectId' }
+      - { $ref: '#/components/parameters/sectionId' }
+    patch:
+      summary: Renombrar una sección
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 120 }
+      responses:
+        '200': { description: Sección, content: { application/json: { schema: { $ref: '#/components/schemas/Section' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      summary: Borrar una sección; si tiene tareas, `moveTasksTo` dice adónde van
+      parameters:
+        - { in: query, name: moveTasksTo, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Borrada }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /projects/{projectId}/sections/{sectionId}/move:
+    parameters:
+      - { $ref: '#/components/parameters/projectId' }
+      - { $ref: '#/components/parameters/sectionId' }
+    post:
+      summary: Mover una columna
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Position' }
+      responses:
+        '200': { description: Sección, content: { application/json: { schema: { $ref: '#/components/schemas/Section' } } } }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /projects/tasks:
+    post:
+      summary: Crear una tarea — en un proyecto, como subtarea (`parentTaskId`) o personal (sin ninguno de los dos)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTask' }
+      responses:
+        '201': { description: Tarea, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /projects/tasks/{taskId}:
+    parameters: [{ $ref: '#/components/parameters/taskId' }]
+    get:
+      summary: Detalle de la tarea (panel derecho) con subtareas, proyectos donde aparece y qué puede hacer quien pregunta
+      responses:
+        '200': { description: Tarea, content: { application/json: { schema: { $ref: '#/components/schemas/TaskDetail' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      summary: Editar título, descripción, responsable o fechas (exige `version`)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateTask' }
+      responses:
+        '200': { description: Tarea, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      summary: Enviar la tarea (y sus subtareas) a la papelera
+      responses:
+        '204': { description: Borrada }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /projects/tasks/{taskId}/move:
+    parameters: [{ $ref: '#/components/parameters/taskId' }]
+    post:
+      summary: Mover una tarjeta dentro de un proyecto (otra sección y/o entre dos tarjetas)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - type: object
+                  required: [version, projectId, sectionId]
+                  properties:
+                    version: { type: integer }
+                    projectId: { type: string, format: uuid }
+                    sectionId: { type: string, format: uuid }
+                - $ref: '#/components/schemas/Position'
+      responses:
+        '200':
+          description: Tarea con su nueva posición
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Task'
+                  - type: object
+                    properties:
+                      placement: { $ref: '#/components/schemas/Placement' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /projects/tasks/{taskId}/complete:
+    parameters: [{ $ref: '#/components/parameters/taskId' }]
+    post:
+      summary: Marcar como finalizada (editor del proyecto o el responsable de la tarea)
+      responses:
+        '200': { description: Tarea, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /projects/tasks/{taskId}/reopen:
+    parameters: [{ $ref: '#/components/parameters/taskId' }]
+    post:
+      summary: Volver a abrir una tarea finalizada
+      responses:
+        '200': { description: Tarea, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /projects/tasks/{taskId}/approval:
+    parameters: [{ $ref: '#/components/parameters/taskId' }]
+    post:
+      summary: Decidir una tarea de aprobación (solo su responsable). Aprobar o rechazar la cierra; pedir cambios la deja abierta
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [approved, changes_requested, rejected] }
+      responses:
+        '200': { description: Tarea, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /projects/tasks/{taskId}/comments:
+    parameters: [{ $ref: '#/components/parameters/taskId' }]
+    post:
+      summary: Comentar (comentarista o más, el responsable o un seguidor). Las @menciones avisan y hacen seguidora a esa persona
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bodyDoc]
+              properties:
+                bodyDoc: { $ref: '#/components/schemas/RichDoc' }
+      responses:
+        '201': { description: Comentario, content: { application/json: { schema: { $ref: '#/components/schemas/Comment' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /projects/comments/{commentId}:
+    parameters: [{ $ref: '#/components/parameters/commentId' }]
+    patch:
+      summary: Editar un comentario (solo su autor). Solo las menciones nuevas avisan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bodyDoc]
+              properties:
+                bodyDoc: { $ref: '#/components/schemas/RichDoc' }
+      responses:
+        '200': { description: Comentario, content: { application/json: { schema: { $ref: '#/components/schemas/Comment' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      summary: Borrar un comentario (su autor o el administrador del proyecto); deja su hueco sin el texto
+      responses:
+        '204': { description: Borrado }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /projects/comments/{commentId}/like:
+    parameters: [{ $ref: '#/components/parameters/commentId' }]
+    post:
+      summary: «Me gusta» a un comentario
+      responses:
+        '200': { description: Quién le da «me gusta», content: { application/json: { schema: { $ref: '#/components/schemas/Likes' } } } }
+    delete:
+      summary: Quitar el «me gusta»
+      responses:
+        '200': { description: Quién le da «me gusta», content: { application/json: { schema: { $ref: '#/components/schemas/Likes' } } } }
+
+  /projects/tasks/{taskId}/like:
+    parameters: [{ $ref: '#/components/parameters/taskId' }]
+    post:
+      summary: «Me gusta» a una tarea
+      responses:
+        '200': { description: Quién le da «me gusta», content: { application/json: { schema: { $ref: '#/components/schemas/Likes' } } } }
+    delete:
+      summary: Quitar el «me gusta»
+      responses:
+        '200': { description: Quién le da «me gusta», content: { application/json: { schema: { $ref: '#/components/schemas/Likes' } } } }
+
+  /projects/tasks/{taskId}/followers:
+    parameters: [{ $ref: '#/components/parameters/taskId' }]
+    post:
+      summary: Seguir la tarea, o sumar a otra persona (eso se la comparte; exige poder editarla)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId]
+              properties:
+                userId: { type: string, format: uuid }
+      responses:
+        '200': { description: Seguidores, content: { application/json: { schema: { $ref: '#/components/schemas/Followers' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /projects/tasks/{taskId}/followers/{userId}:
+    parameters:
+      - { $ref: '#/components/parameters/taskId' }
+      - { in: path, name: userId, required: true, schema: { type: string, format: uuid } }
+    delete:
+      summary: Dejar de seguir (uno mismo) o quitar a otra persona (quien puede editar la tarea)
+      responses:
+        '200': { description: Seguidores, content: { application/json: { schema: { $ref: '#/components/schemas/Followers' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /projects/tasks/{taskId}/attachments:
+    parameters: [{ $ref: '#/components/parameters/taskId' }]
+    post:
+      summary: Registrar un adjunto ya subido a document-service (`resourceType` project_task)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [documentId, fileName, mimeType, sizeBytes]
+              properties:
+                documentId: { type: string, format: uuid }
+                fileName: { type: string, maxLength: 255 }
+                mimeType: { type: string, maxLength: 150 }
+                sizeBytes: { type: integer }
+      responses:
+        '201': { description: Adjunto, content: { application/json: { schema: { $ref: '#/components/schemas/Attachment' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /projects/attachments/{attachmentId}:
+    parameters:
+      - { in: path, name: attachmentId, required: true, schema: { type: string, format: uuid } }
+    delete:
+      summary: Quitar un adjunto (quien lo subió o quien edita la tarea)
+      responses:
+        '204': { description: Quitado }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /projects/tasks/{taskId}/dependencies:
+    parameters: [{ $ref: '#/components/parameters/taskId' }]
+    post:
+      summary: «Esta tarea espera a aquella» (fin → inicio). Quien edita la tarea que espera; la otra tiene que poder verla. Sin ciclos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dependsOnTaskId]
+              properties:
+                dependsOnTaskId: { type: string, format: uuid }
+      responses:
+        '201': { description: Dependencia, content: { application/json: { schema: { $ref: '#/components/schemas/Dependency' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /projects/tasks/{taskId}/dependencies/{dependsOnTaskId}:
+    parameters:
+      - { $ref: '#/components/parameters/taskId' }
+      - { in: path, name: dependsOnTaskId, required: true, schema: { type: string, format: uuid } }
+    delete:
+      summary: Quitar una dependencia
+      responses:
+        '204': { description: Quitada }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /projects/{projectId}/status-updates:
+    parameters: [{ $ref: '#/components/parameters/projectId' }]
+    get:
+      summary: Actualizaciones de estado del proyecto, las más recientes primero
+      parameters:
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        '200':
+          description: Actualizaciones
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/StatusUpdate' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      summary: Publicar el estado del proyecto (editor o administrador del proyecto); avisa a sus miembros
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [on_track, at_risk, off_track, complete] }
+                bodyDoc: { allOf: [{ $ref: '#/components/schemas/RichDoc' }], nullable: true }
+      responses:
+        '201': { description: Actualización, content: { application/json: { schema: { $ref: '#/components/schemas/StatusUpdate' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ── Entregable 4: vínculos con el ERP, plantillas, campos, etiquetas, búsqueda y edición en lote ──
+  /projects/search:
+    get:
+      summary: Buscar tareas y proyectos por título (mínimo 2 caracteres); solo lo que quien pregunta puede ver
+      parameters:
+        - { in: query, name: q, required: true, schema: { type: string, minLength: 2 } }
+      responses:
+        '200':
+          description: Coincidencias (hasta 100 tareas)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/Task'
+                        - type: object
+                          properties:
+                            projects: { type: array, items: { type: object, properties: { projectId: { type: string }, name: { type: string }, color: { type: string } } } }
+                  projects: { type: array, items: { $ref: '#/components/schemas/Project' } }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /projects/tasks/bulk:
+    post:
+      summary: Editar hasta 100 tareas a la vez; cada una en su propia transacción
+      description: >
+        Una tarea que no se puede tocar (rol, versión, no existe) no deshace las demás: la respuesta dice, por tarea, si se aplicó
+        y, si no, el código de error. Cada cambio publica sus eventos de siempre (`projects.task.completed`, `projects.task.assigned`…).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [taskIds, action]
+              properties:
+                taskIds: { type: array, minItems: 1, maxItems: 100, items: { type: string, format: uuid } }
+                action:
+                  oneOf:
+                    - { type: object, required: [type], properties: { type: { type: string, enum: [complete, reopen, delete] } } }
+                    - { type: object, required: [type, assigneeUserId], properties: { type: { type: string, enum: [assign] }, assigneeUserId: { type: string, format: uuid, nullable: true } } }
+                    - { type: object, required: [type, dueOn], properties: { type: { type: string, enum: [due] }, dueOn: { type: string, format: date, nullable: true } } }
+                    - { type: object, required: [type, projectId, sectionId], properties: { type: { type: string, enum: [move] }, projectId: { type: string, format: uuid }, sectionId: { type: string, format: uuid } } }
+                    - { type: object, required: [type, tagId], properties: { type: { type: string, enum: [tag] }, tagId: { type: string, format: uuid } } }
+      responses:
+        '200':
+          description: Resultado por tarea
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        taskId: { type: string, format: uuid }
+                        ok: { type: boolean }
+                        code: { type: string, description: Solo si falló (p. ej. PROJECT_ROLE_INSUFFICIENT) }
+                        message: { type: string }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /projects/templates:
+    get:
+      summary: Plantillas de fábrica (incorporación de cliente, cierre contable, obra, lanzamiento, campaña, contratación)
+      parameters:
+        - { in: query, name: locale, schema: { type: string, enum: [es, en, fr], default: es } }
+      responses:
+        '200':
+          description: Plantillas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code: { type: string }
+                        icon: { type: string }
+                        color: { type: string }
+                        name: { type: string }
+                        description: { type: string }
+                        sections: { type: array, items: { type: string } }
+                        taskCount: { type: integer }
+
+  /projects/from-template:
+    post:
+      summary: Crear un proyecto desde una plantilla (exige `project:create`)
+      description: Las fechas de las tareas se calculan desde `startOn`; las dependencias y los hitos de la plantilla se crean tal cual.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [templateCode, visibility, startOn]
+              properties:
+                templateCode: { type: string }
+                name: { type: string, maxLength: 120, description: Si falta, el nombre de la plantilla }
+                visibility: { type: string, enum: [organization, members] }
+                startOn: { type: string, format: date }
+                locale: { type: string, enum: [es, en, fr], default: es }
+      responses:
+        '201': { description: Proyecto creado, content: { application/json: { schema: { $ref: '#/components/schemas/Project' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /projects/tags:
+    get:
+      summary: Etiquetas de la organización
+      responses:
+        '200':
+          description: Etiquetas por nombre
+          content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Tag' } } } } } }
+    post:
+      summary: Crear una etiqueta; si ya existe una con el mismo nombre (sin distinguir mayúsculas) devuelve esa
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 60 }
+                color: { type: string, enum: [primary, secondary, success, warning, error, info] }
+      responses:
+        '201': { description: Etiqueta, content: { application/json: { schema: { $ref: '#/components/schemas/Tag' } } } }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /projects/linked/{entityType}/{entityId}:
+    parameters:
+      - { in: path, name: entityType, required: true, schema: { $ref: '#/components/schemas/LinkEntity' } }
+      - { in: path, name: entityId, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Tareas vinculadas a un cliente, factura, cotización, orden de compra o producto (para la ficha de ese registro)
+      description: Solo las tareas que quien pregunta puede ver; las de proyectos privados ajenos no aparecen.
+      responses:
+        '200':
+          description: Tareas
+          content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Task' } } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /projects/tasks/{taskId}/links:
+    parameters: [{ $ref: '#/components/parameters/taskId' }]
+    post:
+      summary: Vincular la tarea a un registro del ERP (quien puede editar la tarea); vincular lo mismo dos veces no duplica
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entityType, entityId, label]
+              properties:
+                entityType: { $ref: '#/components/schemas/LinkEntity' }
+                entityId: { type: string, format: uuid }
+                label: { type: string, maxLength: 200, description: Lo que se veía al vincular (p. ej. el nombre del cliente o el número de factura) }
+      responses:
+        '201': { description: Vínculo, content: { application/json: { schema: { $ref: '#/components/schemas/TaskLink' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /projects/links/{linkId}:
+    parameters:
+      - { in: path, name: linkId, required: true, schema: { type: string, format: uuid } }
+    delete:
+      summary: Quitar un vínculo
+      responses:
+        '204': { description: Quitado }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /projects/tasks/{taskId}/tags:
+    parameters: [{ $ref: '#/components/parameters/taskId' }]
+    post:
+      summary: Poner una etiqueta a la tarea
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [tagId], properties: { tagId: { type: string, format: uuid } } } } }
+      responses:
+        '200':
+          description: Etiquetas de la tarea tras el cambio
+          content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Tag' } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /projects/tasks/{taskId}/tags/{tagId}:
+    parameters:
+      - { $ref: '#/components/parameters/taskId' }
+      - { in: path, name: tagId, required: true, schema: { type: string, format: uuid } }
+    delete:
+      summary: Quitar una etiqueta de la tarea
+      responses:
+        '200':
+          description: Etiquetas de la tarea tras el cambio
+          content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Tag' } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /projects/tasks/{taskId}/fields/{fieldId}:
+    parameters:
+      - { $ref: '#/components/parameters/taskId' }
+      - { $ref: '#/components/parameters/fieldId' }
+    put:
+      summary: Llenar (o vaciar con null) un campo personalizado de la tarea
+      description: >
+        El campo debe ser de un proyecto donde está la tarea. Texto ≤ 500; número (acepta coma decimal); fecha AAAA-MM-DD;
+        persona = id de usuario; lista = id de una de sus opciones.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: { oneOf: [{ type: string }, { type: number }], nullable: true }
+      responses:
+        '200':
+          description: Valor normalizado
+          content: { application/json: { schema: { type: object, properties: { value: { oneOf: [{ type: string }, { type: number }], nullable: true } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /projects/fields/{fieldId}:
+    parameters: [{ $ref: '#/components/parameters/fieldId' }]
+    patch:
+      summary: Renombrar el campo o cambiar sus opciones (editor del proyecto)
+      description: Quitar una opción deja vacías las tareas que la tenían; renombrarla (mismo id) no.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 60 }
+                options: { type: array, maxItems: 50, items: { $ref: '#/components/schemas/FieldOptionInput' } }
+      responses:
+        '200': { description: Campo, content: { application/json: { schema: { $ref: '#/components/schemas/CustomField' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Validation' }
+    delete:
+      summary: Borrar el campo y todos sus valores
+      responses:
+        '204': { description: Borrado }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /projects/{projectId}/duplicate:
+    parameters: [{ $ref: '#/components/parameters/projectId' }]
+    post:
+      summary: Duplicar un proyecto (exige `project:create` y poder verlo)
+      description: >
+        Copia secciones, tareas y subtareas (sin responsables y sin completar, con las mismas fechas), campos con sus valores,
+        etiquetas y dependencias. No copia miembros, comentarios ni adjuntos.
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { name: { type: string, maxLength: 120 } } } } }
+      responses:
+        '201': { description: Proyecto nuevo, content: { application/json: { schema: { $ref: '#/components/schemas/Project' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /projects/{projectId}/fields:
+    parameters: [{ $ref: '#/components/parameters/projectId' }]
+    get:
+      summary: Campos personalizados del proyecto, en orden
+      responses:
+        '200':
+          description: Campos
+          content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/CustomField' } } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      summary: Crear un campo personalizado (editor del proyecto; máximo 30 por proyecto)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, type]
+              properties:
+                name: { type: string, maxLength: 60 }
+                type: { type: string, enum: [text, number, select, date, person] }
+                options: { type: array, maxItems: 50, items: { $ref: '#/components/schemas/FieldOptionInput' }, description: Solo para select }
+      responses:
+        '201': { description: Campo, content: { application/json: { schema: { $ref: '#/components/schemas/CustomField' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  # ── Entregable 5: horas y carga de trabajo (gateway: módulos `projects.time_tracking` y `projects.resource_allocation`) ──
+  /projects/time-entries:
+    get:
+      summary: Reporte de horas. Sin `time_entry:read_all`, solo las propias (pedir las de otra persona es 403)
+      parameters:
+        - { in: query, name: from, schema: { type: string, format: date } }
+        - { in: query, name: to, schema: { type: string, format: date } }
+        - { in: query, name: userId, schema: { type: string, format: uuid } }
+        - { in: query, name: projectId, schema: { type: string, format: uuid } }
+        - { in: query, name: taskId, schema: { type: string, format: uuid } }
+        - { in: query, name: billable, schema: { type: boolean } }
+      responses:
+        '200':
+          description: Registros (más recientes primero, hasta 5000) y totales
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/TimeEntry'
+                        - type: object
+                          properties:
+                            taskTitle: { type: string }
+                            taskDeleted: { type: boolean }
+                            projectName: { type: string, nullable: true }
+                            canEdit: { type: boolean }
+                  totalMinutes: { type: integer }
+                  billableMinutes: { type: integer }
+                  truncated: { type: boolean }
+                  canReadAll: { type: boolean }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      summary: Registrar horas en una tarea (su responsable o un editor del proyecto)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [taskId, workedOn, minutes]
+              properties:
+                taskId: { type: string, format: uuid }
+                workedOn: { type: string, format: date }
+                minutes: { type: integer, minimum: 1, maximum: 1440 }
+                billable: { type: boolean, default: true }
+                note: { type: string, maxLength: 500, nullable: true }
+                projectId: { type: string, format: uuid, nullable: true, description: 'Uno de los proyectos de la tarea; si falta, el primero' }
+      responses:
+        '201': { description: Registro, content: { application/json: { schema: { $ref: '#/components/schemas/TimeEntry' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /projects/time-entries/{entryId}:
+    parameters:
+      - { in: path, name: entryId, required: true, schema: { type: string, format: uuid } }
+    patch:
+      summary: Corregir un registro (quien lo hizo o un administrador de proyectos; para los demás es 404)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workedOn: { type: string, format: date }
+                minutes: { type: integer, minimum: 1, maximum: 1440 }
+                billable: { type: boolean }
+                note: { type: string, maxLength: 500, nullable: true }
+                projectId: { type: string, format: uuid, nullable: true }
+      responses:
+        '200': { description: Registro, content: { application/json: { schema: { $ref: '#/components/schemas/TimeEntry' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Validation' }
+    delete:
+      summary: Borrar un registro (quien lo hizo o un administrador de proyectos)
+      responses:
+        '204': { description: Borrado }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /projects/time-entries/timer:
+    get:
+      summary: 'El cronómetro en marcha de quien pregunta (o `timer: null`)'
+      responses:
+        '200': { description: Cronómetro, content: { application/json: { schema: { $ref: '#/components/schemas/TimerState' } } } }
+    post:
+      summary: 'Arrancar el cronómetro en una tarea. Uno por persona: si había otro en otra tarea, se detiene y se registra (`stopped`)'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [taskId]
+              properties:
+                taskId: { type: string, format: uuid }
+                projectId: { type: string, format: uuid, nullable: true }
+                previousWorkedOn: { type: string, format: date, description: 'Día local en que arrancó el anterior' }
+      responses:
+        '201':
+          description: Cronómetro en marcha
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/TimerState'
+                  - type: object
+                    properties:
+                      stopped: { allOf: [{ $ref: '#/components/schemas/TimeEntry' }], nullable: true }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      summary: Descartar el cronómetro sin registrar nada
+      responses:
+        '204': { description: Descartado }
+        '409': { description: '`TIMER_NOT_RUNNING`' }
+
+  /projects/time-entries/timer/stop:
+    post:
+      summary: Detener el cronómetro y registrar sus minutos (como mucho 24 h)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workedOn: { type: string, format: date, description: 'Día LOCAL en que arrancó; si falta, el día UTC' }
+                billable: { type: boolean, default: true }
+                note: { type: string, maxLength: 500, nullable: true }
+      responses:
+        '201': { description: Registro creado, content: { application/json: { schema: { $ref: '#/components/schemas/TimeEntry' } } } }
+        '409': { description: '`TIMER_NOT_RUNNING`' }
+
+  /projects/workload:
+    get:
+      summary: Carga de trabajo por persona y semana (solo tareas que quien pregunta puede ver)
+      description: >
+        Cada tarea abierta con responsable reparte su tiempo estimado entre los días laborables de su inicio a su entrega (sin inicio,
+        todo el día de entrega). Se compara con la capacidad semanal de cada persona (40 h si no se configuró).
+      parameters:
+        - { in: query, name: from, required: true, schema: { type: string, format: date }, description: 'Cualquier día de la primera semana' }
+        - { in: query, name: weeks, schema: { type: integer, minimum: 1, maximum: 12, default: 4 } }
+        - { in: query, name: projectId, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Carga, content: { application/json: { schema: { $ref: '#/components/schemas/Workload' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /projects/workload/capacity/{userId}:
+    parameters:
+      - { in: path, name: userId, required: true, schema: { type: string, format: uuid } }
+    put:
+      summary: Horas por semana de una persona (exige `project:admin`)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [weeklyMinutes]
+              properties:
+                weeklyMinutes: { type: integer, minimum: 0, maximum: 10080 }
+      responses:
+        '200': { description: Guardada, content: { application/json: { schema: { type: object, properties: { userId: { type: string }, weeklyMinutes: { type: integer } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  # ── Entregable 6: facturar el proyecto (gateway: módulo `projects.project_billing`, permiso `project:bill`) ──
+  /projects/billing/{projectId}:
+    parameters: [{ $ref: '#/components/parameters/projectId' }]
+    get:
+      summary: Pestaña Facturación del proyecto — configuración, horas sin facturar, hitos con importe y facturas
+      responses:
+        '200': { description: Resumen, content: { application/json: { schema: { $ref: '#/components/schemas/BillingSummary' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /projects/billing/{projectId}/settings:
+    parameters: [{ $ref: '#/components/parameters/projectId' }]
+    put:
+      summary: A quién y cómo se factura (cliente, servicio que decide el IVA, tarifa por hora, agrupación de líneas)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/BillingSettings' } } }
+      responses:
+        '200': { description: Guardada, content: { application/json: { schema: { $ref: '#/components/schemas/BillingSettings' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /projects/billing/{projectId}/milestones/{taskId}:
+    parameters:
+      - { $ref: '#/components/parameters/projectId' }
+      - { $ref: '#/components/parameters/taskId' }
+    put:
+      summary: Importe fijo de un hito del proyecto (null lo quita); 409 si ya está en una factura
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [amountCents], properties: { amountCents: { type: integer, minimum: 1, nullable: true } } } } }
+      responses:
+        '200': { description: Guardado, content: { application/json: { schema: { type: object, properties: { taskId: { type: string }, amountCents: { type: integer, nullable: true } } } } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /projects/billing/{projectId}/preview:
+    parameters: [{ $ref: '#/components/parameters/projectId' }]
+    post:
+      summary: Vista previa de las líneas, sin apartar nada
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/BillingCriteria' } } }
+      responses:
+        '200': { description: Líneas y totales, content: { application/json: { schema: { $ref: '#/components/schemas/BillingPreview' } } } }
+
+  /projects/billing/{projectId}/reserve:
+    parameters: [{ $ref: '#/components/parameters/projectId' }]
+    post:
+      summary: Aparta las horas y los hitos (con bloqueo) y abre la factura del proyecto en estado pending
+      description: >
+        Devuelve las líneas con las que el navegador crea el borrador en billing-service; luego se enlaza con `attach`. Si el borrador
+        no se pudo crear, `release` devuelve todo a «por facturar». 409 `NOTHING_TO_BILL` si otra persona ya lo reservó.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/BillingCriteria' } } }
+      responses:
+        '201':
+          description: Reserva
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  invoice: { $ref: '#/components/schemas/ProjectInvoice' }
+                  preview: { $ref: '#/components/schemas/BillingPreview' }
+                  settings: { $ref: '#/components/schemas/BillingSettings' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { description: '`BILLING_NOT_CONFIGURED` (falta cliente, servicio o tarifa)' }
+
+  /projects/billing/invoices/{billingId}/attach:
+    parameters:
+      - { in: path, name: billingId, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Enlaza el borrador creado en billing-service (repetirlo con el mismo id no hace nada)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [invoiceId], properties: { invoiceId: { type: string, format: uuid } } } } }
+      responses:
+        '200': { description: Enlazada, content: { application/json: { schema: { $ref: '#/components/schemas/ProjectInvoice' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /projects/billing/invoices/{billingId}/release:
+    parameters:
+      - { in: path, name: billingId, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Devuelve las horas y los hitos a «por facturar» (solo antes de emitir; una emitida se anula en Facturación)
+      responses:
+        '200': { description: Liberada, content: { application/json: { schema: { $ref: '#/components/schemas/ProjectInvoice' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ── Entregable 7: reglas, formularios y panel (módulo `projects.tasks_kanban`) ──
+  /projects/{projectId}/rules:
+    parameters: [{ $ref: '#/components/parameters/projectId' }]
+    get:
+      summary: Reglas del proyecto (las ven sus miembros)
+      responses:
+        '200': { description: Reglas, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Rule' } } } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      summary: 'Crear una regla «cuando pase X, haz Y» (editor del proyecto; hasta 50)'
+      description: >
+        Corre tras confirmar el cambio que la dispara, a nombre de quien la creó o la editó por última vez y con su rol en el proyecto,
+        por los mismos casos de uso que una persona. Lo que hace una regla no dispara otras. Si una acción falla, el cambio de la
+        persona se queda y el error va a `lastError`.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RuleInput' } } }
+      responses:
+        '201': { description: Regla, content: { application/json: { schema: { $ref: '#/components/schemas/Rule' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /projects/rules/{ruleId}:
+    parameters:
+      - { in: path, name: ruleId, required: true, schema: { type: string, format: uuid } }
+    patch:
+      summary: Cambiar una regla (quien la cambia pasa a ser su dueño)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RuleInput' } } }
+      responses:
+        '200': { description: Regla, content: { application/json: { schema: { $ref: '#/components/schemas/Rule' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Validation' }
+    delete:
+      summary: Borrar una regla
+      responses:
+        '204': { description: Borrada }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /projects/{projectId}/forms:
+    parameters: [{ $ref: '#/components/parameters/projectId' }]
+    get:
+      summary: Formularios de solicitud del proyecto (editores)
+      responses:
+        '200': { description: Formularios, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Form' } } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      summary: Crear un formulario de solicitud (editor del proyecto)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/FormInput' } } }
+      responses:
+        '201': { description: Formulario, content: { application/json: { schema: { $ref: '#/components/schemas/Form' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /projects/forms/{formId}:
+    parameters:
+      - { in: path, name: formId, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: El formulario para llenarlo (cualquiera de la organización, aunque no sea miembro; 404 si está cerrado)
+      responses:
+        '200':
+          description: Formulario
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  title: { type: string }
+                  description: { type: string, nullable: true }
+                  projectName: { type: string }
+                  questions: { type: array, items: { $ref: '#/components/schemas/FormQuestion' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      summary: Cambiar el formulario (editor del proyecto)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/FormInput' } } }
+      responses:
+        '200': { description: Formulario, content: { application/json: { schema: { $ref: '#/components/schemas/Form' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      summary: Borrar el formulario
+      responses:
+        '204': { description: Borrado }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /projects/forms/{formId}/submit:
+    parameters:
+      - { in: path, name: formId, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Enviar una solicitud; crea la tarea y quien la envía queda como seguidor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string, maxLength: 500 }
+                answers: { type: object, additionalProperties: { type: string }, description: 'Por id de pregunta' }
+      responses:
+        '201': { description: Creada, content: { application/json: { schema: { type: object, properties: { taskId: { type: string, format: uuid } } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /projects/{projectId}/dashboard:
+    parameters: [{ $ref: '#/components/parameters/projectId' }]
+    get:
+      summary: Panel del proyecto (lo mismo que la lista, contado)
+      responses:
+        '200': { description: Panel, content: { application/json: { schema: { $ref: '#/components/schemas/Dashboard' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  parameters:
+    projectId: { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
+    sectionId: { in: path, name: sectionId, required: true, schema: { type: string, format: uuid } }
+    taskId: { in: path, name: taskId, required: true, schema: { type: string, format: uuid } }
+    commentId: { in: path, name: commentId, required: true, schema: { type: string, format: uuid } }
+    fieldId: { in: path, name: fieldId, required: true, schema: { type: string, format: uuid } }
+  responses:
+    Forbidden: { description: Sin permiso o rol insuficiente en el proyecto, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    NotFound: { description: No existe o no se puede ver, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Conflict: { description: Versión vieja, último administrador, sección con tareas…, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Validation: { description: Datos inválidos, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  schemas:
+    RuleAction:
+      oneOf:
+        - { type: object, required: [type, userId], properties: { type: { type: string, enum: [assign] }, userId: { type: string, format: uuid, nullable: true } } }
+        - { type: object, required: [type, days], properties: { type: { type: string, enum: [set_due] }, days: { type: integer, minimum: 0, maximum: 365 } } }
+        - { type: object, required: [type, sectionId], properties: { type: { type: string, enum: [move_to_section] }, sectionId: { type: string, format: uuid } } }
+        - { type: object, required: [type], properties: { type: { type: string, enum: [complete] } } }
+        - { type: object, required: [type, tagId], properties: { type: { type: string, enum: [add_tag] }, tagId: { type: string, format: uuid } } }
+        - { type: object, required: [type, userId], properties: { type: { type: string, enum: [add_follower] }, userId: { type: string, format: uuid } } }
+    RuleInput:
+      type: object
+      required: [name, trigger, actions]
+      properties:
+        name: { type: string, maxLength: 120 }
+        trigger: { type: string, enum: [task_added, task_moved, task_completed] }
+        triggerSectionId: { type: string, format: uuid, nullable: true }
+        actions: { type: array, minItems: 1, maxItems: 5, items: { $ref: '#/components/schemas/RuleAction' } }
+        enabled: { type: boolean, default: true }
+    Rule:
+      allOf:
+        - $ref: '#/components/schemas/RuleInput'
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            projectId: { type: string, format: uuid }
+            runCount: { type: integer }
+            lastRunAt: { type: string, format: date-time, nullable: true }
+            lastError: { type: string, nullable: true }
+            createdBy: { type: string, format: uuid }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+    FormQuestion:
+      type: object
+      required: [label, type]
+      properties:
+        id: { type: string, format: uuid }
+        label: { type: string, maxLength: 200 }
+        type: { type: string, enum: [text, long_text, date, select] }
+        required: { type: boolean }
+        options: { type: array, items: { type: string } }
+        mapsToDue: { type: boolean, description: 'Una pregunta de fecha puede ser la entrega de la tarea' }
+    FormInput:
+      type: object
+      required: [title, questions]
+      properties:
+        title: { type: string, maxLength: 120 }
+        description: { type: string, maxLength: 1000, nullable: true }
+        questions: { type: array, maxItems: 20, items: { $ref: '#/components/schemas/FormQuestion' } }
+        sectionId: { type: string, format: uuid, nullable: true }
+        assigneeUserId: { type: string, format: uuid, nullable: true }
+        enabled: { type: boolean, default: true }
+    Form:
+      allOf:
+        - $ref: '#/components/schemas/FormInput'
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            projectId: { type: string, format: uuid }
+            submissionCount: { type: integer }
+            createdBy: { type: string, format: uuid }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+    Dashboard:
+      type: object
+      properties:
+        today: { type: string, format: date }
+        totals:
+          type: object
+          properties:
+            total: { type: integer }
+            open: { type: integer }
+            completed: { type: integer }
+            overdue: { type: integer }
+            unassigned: { type: integer }
+            dueThisWeek: { type: integer }
+        bySection: { type: array, items: { type: object, properties: { sectionId: { type: string }, name: { type: string }, open: { type: integer }, completed: { type: integer } } } }
+        byAssignee: { type: array, items: { type: object, properties: { userId: { type: string, nullable: true }, open: { type: integer }, overdue: { type: integer } } } }
+        completedByWeek: { type: array, items: { type: object, properties: { weekStart: { type: string, format: date }, count: { type: integer } } } }
+        milestones: { type: array, items: { type: object, properties: { taskId: { type: string }, title: { type: string }, dueOn: { type: string, format: date, nullable: true }, completed: { type: boolean } } } }
+        time: { type: object, properties: { estimatedMinutes: { type: integer }, actualMinutes: { type: integer } } }
+    BillingSettings:
+      type: object
+      required: [customerId, hourlyRateCents, serviceProductId, groupBy]
+      properties:
+        customerId: { type: string, format: uuid, nullable: true }
+        customerLabel: { type: string, nullable: true }
+        hourlyRateCents: { type: integer, nullable: true, description: 'Tarifa por hora, sin IVA' }
+        serviceProductId: { type: string, format: uuid, nullable: true, description: 'Producto de servicio de las líneas (decide el IVA)' }
+        serviceProductLabel: { type: string, nullable: true }
+        groupBy: { type: string, enum: [task, person, single] }
+    BillingCriteria:
+      type: object
+      required: [includeHours]
+      properties:
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        includeHours: { type: boolean }
+        milestoneTaskIds: { type: array, items: { type: string, format: uuid } }
+        groupBy: { type: string, enum: [task, person, single] }
+    BillingPreview:
+      type: object
+      properties:
+        groups:
+          type: array
+          items:
+            type: object
+            properties:
+              kind: { type: string, enum: [hours, milestone] }
+              key: { type: string }
+              label: { type: string, nullable: true }
+              minutes: { type: integer }
+              quantity: { type: number, description: 'Horas con 2 decimales; 1 en un hito' }
+              unitPriceCents: { type: integer }
+              amountCents: { type: integer }
+        entryCount: { type: integer }
+        milestoneCount: { type: integer }
+        minutes: { type: integer }
+        amountCents: { type: integer }
+    ProjectInvoice:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        invoiceId: { type: string, format: uuid, nullable: true, description: 'Factura en billing-service' }
+        status: { type: string, enum: [pending, draft, issued, voided, released] }
+        number: { type: string, nullable: true }
+        minutes: { type: integer }
+        entryCount: { type: integer }
+        milestoneCount: { type: integer }
+        amountCents: { type: integer }
+        conflicts: { type: integer, description: 'Horas o hitos que, al emitirse un borrador ya liberado, estaban en otra factura: revisar' }
+        createdBy: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    BillingSummary:
+      type: object
+      properties:
+        settings: { $ref: '#/components/schemas/BillingSettings' }
+        unbilledMinutes: { type: integer }
+        unbilledEntries: { type: integer }
+        unbilledAmountCents: { type: integer }
+        milestones:
+          type: array
+          items:
+            type: object
+            properties:
+              taskId: { type: string, format: uuid }
+              title: { type: string }
+              dueOn: { type: string, format: date, nullable: true }
+              completedAt: { type: string, format: date-time, nullable: true }
+              amountCents: { type: integer, nullable: true }
+              billingId: { type: string, format: uuid, nullable: true }
+        invoices: { type: array, items: { $ref: '#/components/schemas/ProjectInvoice' } }
+    TimeEntry:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        projectId: { type: string, format: uuid, nullable: true }
+        userId: { type: string, format: uuid }
+        workedOn: { type: string, format: date }
+        minutes: { type: integer }
+        billable: { type: boolean }
+        note: { type: string, nullable: true }
+        source: { type: string, enum: [manual, timer] }
+        billingId: { type: string, format: uuid, nullable: true, description: 'Reserva o factura del proyecto; con ella el registro ya no se cambia (409)' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    TimerState:
+      type: object
+      properties:
+        timer:
+          type: object
+          nullable: true
+          properties:
+            taskId: { type: string, format: uuid }
+            taskTitle: { type: string }
+            projectId: { type: string, format: uuid, nullable: true }
+            startedAt: { type: string, format: date-time }
+    Workload:
+      type: object
+      properties:
+        weekStarts: { type: array, items: { type: string, format: date }, description: Lunes de cada semana }
+        capacities: { type: object, additionalProperties: { type: integer }, description: 'Minutos por semana configurados, por usuario' }
+        defaultWeeklyMinutes: { type: integer }
+        people:
+          type: array
+          items:
+            type: object
+            properties:
+              userId: { type: string, format: uuid }
+              weeklyMinutes: { type: integer }
+              weeks: { type: array, items: { type: object, properties: { weekStart: { type: string, format: date }, minutes: { type: integer }, taskCount: { type: integer } } } }
+              tasks:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string, format: uuid }
+                    title: { type: string }
+                    kind: { type: string }
+                    startOn: { type: string, format: date, nullable: true }
+                    dueOn: { type: string, format: date }
+                    estimatedMinutes: { type: integer, nullable: true }
+                    minutesByWeek: { type: object, additionalProperties: { type: integer } }
+                    weeks: { type: array, items: { type: string, format: date } }
+    LinkEntity: { type: string, enum: [customer, invoice, quote, purchase_order, product] }
+    TaskLink:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        entityType: { $ref: '#/components/schemas/LinkEntity' }
+        entityId: { type: string, format: uuid }
+        label: { type: string }
+        createdBy: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+    Tag:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        color: { type: string }
+    FieldOption:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        label: { type: string }
+        color: { type: string }
+    FieldOptionInput:
+      type: object
+      required: [label]
+      properties:
+        id: { type: string, format: uuid, nullable: true, description: La opción existente que se conserva (renombrarla no borra valores) }
+        label: { type: string }
+        color: { type: string, nullable: true }
+    CustomField:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        name: { type: string }
+        type: { type: string, enum: [text, number, select, date, person] }
+        options: { type: array, items: { $ref: '#/components/schemas/FieldOption' } }
+        rank: { type: string }
+    Dependency:
+      type: object
+      properties:
+        taskId: { type: string, format: uuid, description: La que espera }
+        dependsOnTaskId: { type: string, format: uuid, description: La que tiene que terminar antes }
+    LinkedTask:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        dueOn: { type: string, format: date, nullable: true }
+        completed: { type: boolean }
+    StatusUpdate:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [on_track, at_risk, off_track, complete] }
+        bodyDoc: { allOf: [{ $ref: '#/components/schemas/RichDoc' }], nullable: true }
+        bodyText: { type: string, nullable: true }
+        authorUserId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+    RichDoc:
+      type: object
+      description: >
+        Documento de TipTap (ProseMirror en JSON). El servidor solo acepta una lista blanca: doc, paragraph, text, hardBreak,
+        bulletList, orderedList, listItem, blockquote, codeBlock y mention (attrs id uuid y label); marcas bold, italic, strike,
+        code y link (solo http, https o mailto). Máximo 20 000 caracteres de texto.
+      additionalProperties: true
+    Likes:
+      type: object
+      properties:
+        likedBy: { type: array, items: { type: string, format: uuid } }
+    Followers:
+      type: object
+      properties:
+        followers: { type: array, items: { type: string, format: uuid } }
+    Comment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        authorUserId: { type: string, format: uuid }
+        bodyDoc: { $ref: '#/components/schemas/RichDoc' }
+        bodyText: { type: string }
+        mentionedUserIds: { type: array, items: { type: string, format: uuid } }
+        createdAt: { type: string, format: date-time }
+        editedAt: { type: string, format: date-time, nullable: true }
+        deleted: { type: boolean }
+        likedBy: { type: array, items: { type: string, format: uuid } }
+    Attachment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        documentId: { type: string, format: uuid }
+        fileName: { type: string }
+        mimeType: { type: string }
+        sizeBytes: { type: integer }
+        uploadedBy: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+    Activity:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        actorUserId: { type: string, format: uuid, nullable: true }
+        kind: { type: string, example: due_changed }
+        data: { type: object, additionalProperties: true }
+        at: { type: string, format: date-time }
+    Error:
+      type: object
+      properties:
+        code: { type: string }
+        message: { type: string }
+        currentVersion: { type: integer, description: Solo en VERSION_CONFLICT }
+        details: { type: array, items: { type: object, properties: { field: { type: string }, message: { type: string } } } }
+    ProjectRole: { type: string, enum: [admin, editor, commenter, viewer] }
+    Position:
+      type: object
+      description: Vecinas tal como las ve el cliente. Sin ninguna, al final.
+      properties:
+        beforeId: { type: string, format: uuid, nullable: true }
+        afterId: { type: string, format: uuid, nullable: true }
+    Project:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        color: { type: string, enum: [primary, secondary, success, warning, error, info] }
+        icon: { type: string, example: mdi-folder-outline }
+        visibility: { type: string, enum: [organization, members] }
+        ownerUserId: { type: string, format: uuid }
+        status: { type: string, enum: [active, archived] }
+        defaultView: { type: string, enum: [list, board] }
+        version: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ProjectWithRole:
+      allOf:
+        - $ref: '#/components/schemas/Project'
+        - type: object
+          properties:
+            myRole: { $ref: '#/components/schemas/ProjectRole' }
+            isMember: { type: boolean }
+            latestStatus: { allOf: [{ $ref: '#/components/schemas/StatusUpdate' }], nullable: true }
+    ProjectDetail:
+      allOf:
+        - $ref: '#/components/schemas/ProjectWithRole'
+        - type: object
+          properties:
+            members: { type: array, items: { $ref: '#/components/schemas/Member' } }
+    CreateProject:
+      type: object
+      required: [name, visibility, sectionNames]
+      properties:
+        name: { type: string, maxLength: 120 }
+        description: { type: string, nullable: true }
+        color: { type: string, enum: [primary, secondary, success, warning, error, info] }
+        icon: { type: string }
+        visibility: { type: string, enum: [organization, members] }
+        defaultView: { type: string, enum: [list, board] }
+        sectionNames: { type: array, minItems: 1, maxItems: 20, items: { type: string } }
+    UpdateProject:
+      type: object
+      required: [version]
+      properties:
+        version: { type: integer }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        color: { type: string }
+        icon: { type: string }
+        visibility: { type: string, enum: [organization, members] }
+        defaultView: { type: string, enum: [list, board] }
+    Member:
+      type: object
+      properties:
+        userId: { type: string, format: uuid }
+        role: { $ref: '#/components/schemas/ProjectRole' }
+        addedAt: { type: string, format: date-time }
+    Section:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        rank: { type: string }
+    Placement:
+      type: object
+      properties:
+        projectId: { type: string, format: uuid }
+        sectionId: { type: string, format: uuid }
+        rank: { type: string }
+    Task:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        parentTaskId: { type: string, format: uuid, nullable: true }
+        kind: { type: string, enum: [task, milestone, approval] }
+        approvalStatus: { type: string, enum: [pending, approved, changes_requested, rejected], nullable: true }
+        title: { type: string }
+        description: { type: string, nullable: true, description: Texto plano (si hay descriptionDoc, sale de él) }
+        descriptionDoc: { allOf: [{ $ref: '#/components/schemas/RichDoc' }], nullable: true }
+        assigneeUserId: { type: string, format: uuid, nullable: true }
+        assignedAt: { type: string, format: date-time, nullable: true }
+        startOn: { type: string, format: date, nullable: true }
+        dueOn: { type: string, format: date, nullable: true }
+        estimatedMinutes: { type: integer, nullable: true, description: 'Tiempo estimado (minutos)' }
+        completedAt: { type: string, format: date-time, nullable: true }
+        completedBy: { type: string, format: uuid, nullable: true }
+        createdBy: { type: string, format: uuid }
+        version: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    SubtaskCount:
+      type: object
+      properties:
+        total: { type: integer }
+        completed: { type: integer }
+    Board:
+      type: object
+      properties:
+        project:
+          allOf:
+            - $ref: '#/components/schemas/Project'
+            - type: object
+              properties:
+                myRole: { $ref: '#/components/schemas/ProjectRole' }
+        sections: { type: array, items: { $ref: '#/components/schemas/Section' } }
+        tasks:
+          type: array
+          items:
+            allOf:
+              - $ref: '#/components/schemas/Task'
+              - type: object
+                properties:
+                  sectionId: { type: string, format: uuid }
+                  rank: { type: string }
+                  subtasks: { $ref: '#/components/schemas/SubtaskCount' }
+                  tags: { type: array, items: { $ref: '#/components/schemas/Tag' } }
+                  actualMinutes: { type: integer, description: 'Minutos registrados' }
+                  values: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: number }] }, description: 'Valor de cada campo personalizado, por id de campo' }
+        fields: { type: array, items: { $ref: '#/components/schemas/CustomField' } }
+        dependencies: { type: array, items: { $ref: '#/components/schemas/Dependency' }, description: Solo entre tareas de este proyecto (flechas del cronograma) }
+    TaskDetail:
+      allOf:
+        - $ref: '#/components/schemas/Task'
+        - type: object
+          properties:
+            parent: { type: object, nullable: true, properties: { id: { type: string }, title: { type: string } } }
+            subtasks: { type: array, items: { $ref: '#/components/schemas/Task' } }
+            projects:
+              type: array
+              items:
+                type: object
+                properties:
+                  projectId: { type: string, format: uuid }
+                  name: { type: string }
+                  color: { type: string }
+                  sectionId: { type: string, format: uuid }
+                  sectionName: { type: string, nullable: true }
+            links: { type: array, items: { $ref: '#/components/schemas/TaskLink' } }
+            tags: { type: array, items: { $ref: '#/components/schemas/Tag' } }
+            fields:
+              type: array
+              description: Campos de los proyectos de la tarea, con su valor (null si está vacío)
+              items:
+                allOf:
+                  - $ref: '#/components/schemas/CustomField'
+                  - type: object
+                    properties:
+                      value: { oneOf: [{ type: string }, { type: number }], nullable: true }
+            blockedBy: { type: array, items: { $ref: '#/components/schemas/LinkedTask' }, description: Lo que espera (solo las que quien pregunta puede ver) }
+            blocking: { type: array, items: { $ref: '#/components/schemas/LinkedTask' } }
+            followers: { type: array, items: { type: string, format: uuid } }
+            likedBy: { type: array, items: { type: string, format: uuid } }
+            attachments: { type: array, items: { $ref: '#/components/schemas/Attachment' } }
+            comments: { type: array, items: { $ref: '#/components/schemas/Comment' } }
+            activity: { type: array, items: { $ref: '#/components/schemas/Activity' } }
+            canComment: { type: boolean }
+            canEdit: { type: boolean }
+            canComplete: { type: boolean }
+            canDecide: { type: boolean, description: Solo el responsable de una tarea de aprobación }
+            timeEntries: { type: array, items: { $ref: '#/components/schemas/TimeEntry' } }
+            actualMinutes: { type: integer }
+            canLogTime: { type: boolean, description: 'El responsable o un editor' }
+    MyTask:
+      allOf:
+        - $ref: '#/components/schemas/Task'
+        - type: object
+          properties:
+            parent: { type: object, nullable: true, properties: { id: { type: string }, title: { type: string } } }
+            projects:
+              type: array
+              items: { type: object, properties: { projectId: { type: string }, name: { type: string }, color: { type: string } } }
+            subtasks: { $ref: '#/components/schemas/SubtaskCount' }
+    CreateTask:
+      allOf:
+        - type: object
+          required: [title]
+          properties:
+            title: { type: string, maxLength: 500 }
+            description: { type: string, nullable: true }
+            descriptionDoc: { allOf: [{ $ref: '#/components/schemas/RichDoc' }], nullable: true }
+            kind: { type: string, enum: [task, milestone, approval] }
+            assigneeUserId: { type: string, format: uuid, nullable: true }
+            startOn: { type: string, format: date, nullable: true }
+            dueOn: { type: string, format: date, nullable: true }
+            estimatedMinutes: { type: integer, minimum: 0, nullable: true }
+            projectId: { type: string, format: uuid, nullable: true }
+            sectionId: { type: string, format: uuid, nullable: true }
+            parentTaskId: { type: string, format: uuid, nullable: true }
+        - $ref: '#/components/schemas/Position'
+    UpdateTask:
+      type: object
+      required: [version]
+      properties:
+        version: { type: integer }
+        kind: { type: string, enum: [task, milestone, approval], description: Convertir en aprobación o volver a tarea normal }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        descriptionDoc: { allOf: [{ $ref: '#/components/schemas/RichDoc' }], nullable: true }
+        assigneeUserId: { type: string, format: uuid, nullable: true }
+        startOn: { type: string, format: date, nullable: true }
+        dueOn: { type: string, format: date, nullable: true }
+        estimatedMinutes: { type: integer, minimum: 0, nullable: true }

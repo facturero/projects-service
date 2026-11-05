@@ -1,0 +1,638 @@
+asyncapi: 2.6.0
+info:
+  title: projects-service — eventos
+  version: 1.0.0
+  description: >-
+    projects-service PUBLICA estos eventos en el exchange `crm.events` (patrón Outbox, @facturero/outbox-relay) y CONSUME dos de billing-service (`billing.invoice.issued` y `billing.invoice.voided`, cola `projects-service.events`) para seguir las facturas de sus proyectos.
+    Todo payload lleva `organizationId` y, añadidos por el relay, actor, IP y request-id. Hoy los consume la bitácora de auditoría
+    (`audit.event.projects_*` en el frontend). notification-service guarda en la campana los que son proveedores (traen `userIds`: a
+    quién avisar, calculado aquí) y el gateway refresca los tableros abiertos (`projects.changed`) con los que traen `projectIds`.
+channels:
+  projects.project.created:
+    publish:
+      summary: Se creó un proyecto
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/ProjectPayload'
+            - type: object
+              properties:
+                color: { type: string }
+                defaultView: { type: string, enum: [list, board] }
+                templateCode: { type: string, description: Si se creó desde una plantilla }
+                duplicatedFrom: { type: string, format: uuid, description: Si es copia de otro proyecto }
+                taskCount: { type: integer, description: Tareas creadas junto con el proyecto (plantilla o copia) }
+  projects.project.updated:
+    publish:
+      summary: Cambió el nombre, la descripción, el color, el icono, la visibilidad o la vista por defecto
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/ProjectPayload'
+            - type: object
+              properties:
+                changes: { type: array, items: { type: string } }
+  projects.project.archived:
+    publish:
+      summary: Proyecto archivado (queda de solo lectura)
+      message: { payload: { $ref: '#/components/schemas/ProjectPayload' } }
+  projects.project.unarchived:
+    publish:
+      summary: Proyecto desarchivado
+      message: { payload: { $ref: '#/components/schemas/ProjectPayload' } }
+  projects.project.deleted:
+    publish:
+      summary: Proyecto enviado a la papelera
+      message: { payload: { $ref: '#/components/schemas/ProjectPayload' } }
+  projects.member.added:
+    publish:
+      summary: Alguien fue sumado al proyecto
+      message: { payload: { $ref: '#/components/schemas/MemberPayload' } }
+  projects.member.updated:
+    publish:
+      summary: Cambió el rol de un miembro
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/MemberPayload'
+            - type: object
+              properties:
+                previousRole: { type: string, enum: [admin, editor, commenter, viewer] }
+  projects.member.removed:
+    publish:
+      summary: Alguien salió o fue quitado del proyecto
+      message: { payload: { $ref: '#/components/schemas/MemberPayload' } }
+  projects.section.created:
+    publish:
+      summary: Nueva sección (columna)
+      message: { payload: { $ref: '#/components/schemas/SectionPayload' } }
+  projects.section.updated:
+    publish:
+      summary: Sección renombrada (`changes` = name) o movida (`changes` = rank)
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/SectionPayload'
+            - type: object
+              properties:
+                changes: { type: array, items: { type: string } }
+  projects.section.deleted:
+    publish:
+      summary: Sección borrada; sus tareas vivas pasaron a `movedToSectionId`
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/SectionPayload'
+            - type: object
+              properties:
+                movedTasks: { type: integer }
+                movedToSectionId: { type: string, format: uuid, nullable: true }
+  projects.task.created:
+    publish:
+      summary: Se creó una tarea (en un proyecto, como subtarea o personal)
+      message: { payload: { $ref: '#/components/schemas/TaskPayload' } }
+  projects.task.updated:
+    publish:
+      summary: Cambió el título, la descripción o las fechas (el responsable va en `projects.task.assigned`)
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/TaskPayload'
+            - type: object
+              properties:
+                changes: { type: array, items: { type: string } }
+  projects.task.assigned:
+    publish:
+      summary: Cambió el responsable (también al crear una tarea ya asignada)
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/TaskPayload'
+            - type: object
+              properties:
+                previousAssigneeUserId: { type: string, format: uuid, nullable: true }
+                userIds: { type: array, items: { type: string, format: uuid }, description: A quién avisar (vacío si se asignó a sí mismo) }
+  projects.task.moved:
+    publish:
+      summary: Se movió una tarjeta en un proyecto
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/TaskPayload'
+            - type: object
+              properties:
+                projectId: { type: string, format: uuid }
+                fromSectionId: { type: string, format: uuid }
+                toSectionId: { type: string, format: uuid }
+  projects.task.completed:
+    publish:
+      summary: Tarea marcada como finalizada
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/TaskPayload'
+            - type: object
+              properties:
+                completedBy: { type: string, format: uuid }
+                userIds: { type: array, items: { type: string, format: uuid }, description: Seguidores y autor, menos quien la completó }
+  projects.task.reopened:
+    publish:
+      summary: Tarea finalizada que se volvió a abrir
+      message: { payload: { $ref: '#/components/schemas/TaskPayload' } }
+  projects.task.deleted:
+    publish:
+      summary: Tarea enviada a la papelera (con sus subtareas)
+      message: { payload: { $ref: '#/components/schemas/TaskPayload' } }
+  projects.comment.created:
+    publish:
+      summary: Comentario nuevo. Avisa (campana) a seguidores, responsable y autor de la tarea, menos quien comenta y los mencionados
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/CommentPayload'
+            - type: object
+              properties:
+                excerpt: { type: string, description: Comienzo del texto (140 caracteres), nunca el documento }
+                userIds: { type: array, items: { type: string, format: uuid } }
+  projects.comment.updated:
+    publish:
+      summary: Comentario editado por su autor
+      message: { payload: { $ref: '#/components/schemas/CommentPayload' } }
+  projects.comment.deleted:
+    publish:
+      summary: Comentario borrado (por su autor o por el administrador del proyecto)
+      message: { payload: { $ref: '#/components/schemas/CommentPayload' } }
+  projects.task.mentioned:
+    publish:
+      summary: Una o varias personas mencionadas por primera vez en un comentario o en la descripción (campana a cada una)
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/TaskPayload'
+            - type: object
+              properties:
+                where: { type: string, enum: [comment, description] }
+                commentId: { type: string, format: uuid, nullable: true }
+                excerpt: { type: string }
+                userIds: { type: array, items: { type: string, format: uuid } }
+  projects.follower.added:
+    publish:
+      summary: Alguien empezó a seguir la tarea (o lo sumaron)
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/TaskPayload'
+            - type: object
+              properties:
+                userId: { type: string, format: uuid }
+  projects.follower.removed:
+    publish:
+      summary: Alguien dejó de seguir la tarea (o lo quitaron)
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/TaskPayload'
+            - type: object
+              properties:
+                userId: { type: string, format: uuid }
+  projects.attachment.added:
+    publish:
+      summary: Archivo adjuntado a la tarea (el archivo vive en document-service)
+      message: { payload: { $ref: '#/components/schemas/AttachmentPayload' } }
+  projects.attachment.removed:
+    publish:
+      summary: Adjunto quitado de la tarea
+      message: { payload: { $ref: '#/components/schemas/AttachmentPayload' } }
+  projects.approval.requested:
+    publish:
+      summary: Se pide una aprobación a su responsable (campana)
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/TaskPayload'
+            - type: object
+              properties:
+                userIds: { type: array, items: { type: string, format: uuid } }
+  projects.approval.decided:
+    publish:
+      summary: El responsable aprobó, pidió cambios o rechazó (campana a quien la pidió y a los seguidores)
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/TaskPayload'
+            - type: object
+              properties:
+                decision: { type: string, enum: [approved, changes_requested, rejected] }
+                userIds: { type: array, items: { type: string, format: uuid } }
+  projects.task.due_soon:
+    publish:
+      summary: Vence hoy o mañana (aviso diario desde las 08:00 locales, uno por tarea y día). Lo publica un proceso, sin actor
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/TaskPayload'
+            - type: object
+              properties:
+                when: { type: string, enum: [today, tomorrow] }
+                userIds: { type: array, items: { type: string, format: uuid } }
+  projects.dependency.added:
+    publish:
+      summary: Una tarea pasa a esperar a otra (fin → inicio)
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/TaskPayload'
+            - type: object
+              properties:
+                dependsOnTaskId: { type: string, format: uuid }
+                dependsOnTitle: { type: string }
+  projects.dependency.removed:
+    publish:
+      summary: Se quitó una dependencia
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/TaskPayload'
+            - type: object
+              properties:
+                dependsOnTaskId: { type: string, format: uuid }
+  projects.task.unblocked:
+    publish:
+      summary: Se completó la última tarea que la bloqueaba; «ya puedes empezar» a su responsable (campana)
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/TaskPayload'
+            - type: object
+              properties:
+                blockedByTaskId: { type: string, format: uuid, description: La que se acaba de completar }
+                userIds: { type: array, items: { type: string, format: uuid } }
+  projects.status_update.posted:
+    publish:
+      summary: Nueva actualización de estado del proyecto (campana a sus miembros, menos quien la publica)
+      message:
+        payload:
+          type: object
+          required: [organizationId, projectId, status]
+          properties:
+            organizationId: { type: string, format: uuid }
+            projectId: { type: string, format: uuid }
+            projectName: { type: string }
+            statusUpdateId: { type: string, format: uuid }
+            status: { type: string, enum: [on_track, at_risk, off_track, complete] }
+            excerpt: { type: string }
+            projectIds: { type: array, items: { type: string, format: uuid } }
+            userIds: { type: array, items: { type: string, format: uuid } }
+  projects.link.added:
+    publish:
+      summary: Una tarea se vinculó a un registro del ERP (cliente, factura, cotización, orden de compra, producto)
+      message: { payload: { $ref: '#/components/schemas/LinkPayload' } }
+  projects.link.removed:
+    publish:
+      summary: Se quitó el vínculo de una tarea con un registro del ERP
+      message: { payload: { $ref: '#/components/schemas/LinkPayload' } }
+  projects.tag.created:
+    publish:
+      summary: Nueva etiqueta de la organización
+      message:
+        payload:
+          type: object
+          required: [organizationId, tagId, name]
+          properties:
+            organizationId: { type: string, format: uuid }
+            tagId: { type: string, format: uuid }
+            name: { type: string }
+            color: { type: string }
+  projects.task.tagged:
+    publish:
+      summary: Se puso una etiqueta a una tarea
+      message: { payload: { $ref: '#/components/schemas/TaskTagPayload' } }
+  projects.task.untagged:
+    publish:
+      summary: Se quitó una etiqueta de una tarea
+      message: { payload: { $ref: '#/components/schemas/TaskTagPayload' } }
+  projects.field.created:
+    publish:
+      summary: Nuevo campo personalizado en un proyecto
+      message: { payload: { $ref: '#/components/schemas/FieldPayload' } }
+  projects.field.updated:
+    publish:
+      summary: Se renombró un campo o cambiaron sus opciones
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/FieldPayload'
+            - type: object
+              properties:
+                changes: { type: array, items: { type: string, enum: [name, options] } }
+  projects.field.deleted:
+    publish:
+      summary: Se borró un campo personalizado (y sus valores)
+      message: { payload: { $ref: '#/components/schemas/FieldPayload' } }
+  projects.task.field_set:
+    publish:
+      summary: Se llenó o vació un campo personalizado de una tarea
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/TaskPayload'
+            - type: object
+              properties:
+                fieldId: { type: string, format: uuid }
+                fieldName: { type: string }
+                value: { type: string, nullable: true, description: Como se ve (en una lista, el nombre de la opción); null si se vació }
+  projects.time_entry.logged:
+    publish:
+      summary: Horas registradas en una tarea (a mano o al detener el cronómetro)
+      message: { payload: { $ref: '#/components/schemas/TimeEntryPayload' } }
+  projects.time_entry.updated:
+    publish:
+      summary: Se corrigió un registro de horas
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/TimeEntryPayload'
+            - type: object
+              properties:
+                changes: { type: array, items: { type: string, enum: [workedOn, minutes, billable, note, projectId] } }
+  projects.time_entry.deleted:
+    publish:
+      summary: Se borró un registro de horas
+      message: { payload: { $ref: '#/components/schemas/TimeEntryPayload' } }
+  projects.capacity.updated:
+    publish:
+      summary: Cambió la capacidad semanal de una persona (carga de trabajo)
+      message:
+        payload:
+          type: object
+          required: [organizationId, userId, weeklyMinutes]
+          properties:
+            organizationId: { type: string, format: uuid }
+            userId: { type: string, format: uuid }
+            weeklyMinutes: { type: integer }
+            previousWeeklyMinutes: { type: integer }
+  projects.billing.updated:
+    publish:
+      summary: Cambió a quién o cómo se factura un proyecto
+      message:
+        payload:
+          type: object
+          required: [organizationId, projectId]
+          properties:
+            organizationId: { type: string, format: uuid }
+            projectId: { type: string, format: uuid }
+            customerId: { type: string, format: uuid, nullable: true }
+            customerLabel: { type: string, nullable: true }
+            hourlyRateCents: { type: integer, nullable: true }
+            serviceProductId: { type: string, format: uuid, nullable: true }
+            groupBy: { type: string, enum: [task, person, single] }
+  projects.milestone_amount.set:
+    publish:
+      summary: Se puso o quitó el importe fijo de un hito
+      message:
+        payload:
+          type: object
+          required: [organizationId, projectId, taskId]
+          properties:
+            organizationId: { type: string, format: uuid }
+            projectId: { type: string, format: uuid }
+            taskId: { type: string, format: uuid }
+            title: { type: string }
+            amountCents: { type: integer, nullable: true }
+  projects.invoice.reserved:
+    publish:
+      summary: Se apartaron horas e hitos para una factura del proyecto
+      message: { payload: { $ref: '#/components/schemas/ProjectInvoicePayload' } }
+  projects.invoice.linked:
+    publish:
+      summary: La factura del proyecto quedó enlazada a su borrador de billing-service
+      message: { payload: { $ref: '#/components/schemas/ProjectInvoicePayload' } }
+  projects.invoice.issued:
+    publish:
+      summary: La factura del proyecto se emitió (llegó billing.invoice.issued)
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/ProjectInvoicePayload'
+            - type: object
+              properties:
+                number: { type: string, nullable: true }
+                conflicts: { type: integer, description: 'Si se emitió un borrador ya liberado: lo que estaba en otra factura' }
+  projects.invoice.released:
+    publish:
+      summary: Las horas y los hitos de una factura del proyecto vuelven a quedar por facturar
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/ProjectInvoicePayload'
+            - type: object
+              properties:
+                reason: { type: string, enum: [manual, voided], description: 'manual = liberada antes de emitir; voided = billing la anuló' }
+  billing.invoice.issued:
+    subscribe:
+      summary: Lo publica billing-service. Si la factura es de un proyecto, queda emitida con su número
+      message:
+        payload:
+          type: object
+          required: [organizationId, invoiceId]
+          properties:
+            organizationId: { type: string, format: uuid }
+            invoiceId: { type: string, format: uuid }
+            number: { type: string }
+  billing.invoice.voided:
+    subscribe:
+      summary: Lo publica billing-service. Si la factura es de un proyecto, sus horas e hitos vuelven a quedar por facturar
+      message:
+        payload:
+          type: object
+          required: [organizationId, invoiceId]
+          properties:
+            organizationId: { type: string, format: uuid }
+            invoiceId: { type: string, format: uuid }
+  projects.rule.saved:
+    publish:
+      summary: Se creó o cambió una regla del proyecto
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/RulePayload'
+            - type: object
+              properties:
+                created: { type: boolean }
+  projects.rule.deleted:
+    publish:
+      summary: Se borró una regla
+      message: { payload: { $ref: '#/components/schemas/RulePayload' } }
+  projects.rule.applied:
+    publish:
+      summary: Una regla corrió sobre una tarea (con `error` si alguna acción falló)
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/RulePayload'
+            - type: object
+              properties:
+                taskId: { type: string, format: uuid }
+                projectIds: { type: array, items: { type: string, format: uuid } }
+                error: { type: string, nullable: true }
+  projects.form.saved:
+    publish:
+      summary: Se creó o cambió un formulario de solicitud
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/FormPayload'
+            - type: object
+              properties:
+                created: { type: boolean }
+  projects.form.deleted:
+    publish:
+      summary: Se borró un formulario
+      message: { payload: { $ref: '#/components/schemas/FormPayload' } }
+  projects.form.submitted:
+    publish:
+      summary: Alguien envió una solicitud por formulario (se creó una tarea)
+      message:
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/FormPayload'
+            - type: object
+              properties:
+                taskId: { type: string, format: uuid }
+                submittedBy: { type: string, format: uuid }
+                projectIds: { type: array, items: { type: string, format: uuid } }
+components:
+  schemas:
+    RulePayload:
+      type: object
+      required: [organizationId, ruleId, projectId]
+      properties:
+        organizationId: { type: string, format: uuid }
+        ruleId: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        name: { type: string }
+        trigger: { type: string, enum: [task_added, task_moved, task_completed] }
+        enabled: { type: boolean }
+        actionTypes: { type: array, items: { type: string } }
+    FormPayload:
+      type: object
+      required: [organizationId, formId, projectId]
+      properties:
+        organizationId: { type: string, format: uuid }
+        formId: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        title: { type: string }
+        enabled: { type: boolean }
+        questionCount: { type: integer }
+    ProjectInvoicePayload:
+      type: object
+      required: [organizationId, projectId, billingId, status]
+      properties:
+        organizationId: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        billingId: { type: string, format: uuid, description: Factura del proyecto (la reserva) }
+        invoiceId: { type: string, format: uuid, nullable: true, description: Factura en billing-service }
+        status: { type: string, enum: [pending, draft, issued, voided, released] }
+        minutes: { type: integer }
+        entryCount: { type: integer }
+        milestoneCount: { type: integer }
+        amountCents: { type: integer, description: Subtotal sin IVA }
+    TimeEntryPayload:
+      type: object
+      required: [organizationId, entryId, taskId, userId, workedOn, minutes, billable]
+      properties:
+        organizationId: { type: string, format: uuid }
+        entryId: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        title: { type: string, description: Título de la tarea }
+        projectId: { type: string, format: uuid, nullable: true, description: Proyecto al que se cargan }
+        userId: { type: string, format: uuid }
+        workedOn: { type: string, format: date }
+        minutes: { type: integer }
+        billable: { type: boolean }
+        source: { type: string, enum: [manual, timer] }
+        projectIds: { type: array, items: { type: string, format: uuid }, description: Proyectos de la tarea (tablero en vivo) }
+    LinkPayload:
+      allOf:
+        - $ref: '#/components/schemas/TaskPayload'
+        - type: object
+          properties:
+            linkId: { type: string, format: uuid }
+            entityType: { type: string, enum: [customer, invoice, quote, purchase_order, product] }
+            entityId: { type: string, format: uuid }
+            label: { type: string }
+    TaskTagPayload:
+      allOf:
+        - $ref: '#/components/schemas/TaskPayload'
+        - type: object
+          properties:
+            tagId: { type: string, format: uuid }
+            tagName: { type: string }
+    FieldPayload:
+      type: object
+      required: [organizationId, projectId, fieldId, name, fieldType]
+      properties:
+        organizationId: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        projectName: { type: string }
+        fieldId: { type: string, format: uuid }
+        name: { type: string }
+        fieldType: { type: string, enum: [text, number, select, date, person] }
+    ProjectPayload:
+      type: object
+      required: [organizationId, projectId, name, visibility, status]
+      properties:
+        organizationId: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        name: { type: string }
+        visibility: { type: string, enum: [organization, members] }
+        status: { type: string, enum: [active, archived] }
+    MemberPayload:
+      type: object
+      required: [organizationId, projectId, userId, role]
+      properties:
+        organizationId: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        projectName: { type: string }
+        userId: { type: string, format: uuid }
+        role: { type: string, enum: [admin, editor, commenter, viewer] }
+        userIds: { type: array, items: { type: string, format: uuid }, description: A quién avisar (convención de notification-service y del gateway) }
+    SectionPayload:
+      type: object
+      required: [organizationId, projectId, sectionId, name]
+      properties:
+        organizationId: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        projectName: { type: string }
+        sectionId: { type: string, format: uuid }
+        name: { type: string }
+    CommentPayload:
+      type: object
+      required: [organizationId, taskId, commentId]
+      properties:
+        organizationId: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        title: { type: string, description: Título de la tarea }
+        commentId: { type: string, format: uuid }
+        projectIds: { type: array, items: { type: string, format: uuid } }
+    AttachmentPayload:
+      allOf:
+        - $ref: '#/components/schemas/TaskPayload'
+        - type: object
+          properties:
+            attachmentId: { type: string, format: uuid }
+            documentId: { type: string, format: uuid }
+            fileName: { type: string }
+    TaskPayload:
+      type: object
+      required: [organizationId, taskId, title]
+      properties:
+        organizationId: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        title: { type: string }
+        kind: { type: string, enum: [task, milestone, approval] }
+        parentTaskId: { type: string, format: uuid, nullable: true }
+        assigneeUserId: { type: string, format: uuid, nullable: true }
+        dueOn: { type: string, format: date, nullable: true }
+        completed: { type: boolean }
+        projectIds: { type: array, items: { type: string, format: uuid }, description: Proyectos donde aparece (los de su madre, si es subtarea) }
