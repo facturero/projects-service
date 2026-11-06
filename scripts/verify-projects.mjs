@@ -464,6 +464,19 @@ check(dash7.totals.total === 27 && dash7.totals.completed === 12 && dash7.totals
 try {
   const applied = sql(`SELECT COUNT(*) FROM outbox_messages WHERE type='projects.rule.applied' AND JSON_UNQUOTE(JSON_EXTRACT(payload,'$.organizationId'))='${ORG7}'`);
   check(applied === '12', `projects.rule.applied: 12 en el outbox (${applied})`);
+  // Bitácora: lo que hizo la regla o el formulario lleva `via` con cuál fue; lo que hizo la persona, no.
+  const byRule = sql(
+    `SELECT COUNT(*) FROM outbox_messages WHERE type='projects.task.completed' AND JSON_UNQUOTE(JSON_EXTRACT(payload,'$.organizationId'))='${ORG7}' AND JSON_UNQUOTE(JSON_EXTRACT(payload,'$.via.id'))='${rule7.json.id}' AND JSON_UNQUOTE(JSON_EXTRACT(payload,'$.via.type'))='rule'`,
+  );
+  check(byRule === '12', `las 12 tareas completadas por la regla llevan via = la regla (${byRule})`);
+  const movedVia = sql(
+    `SELECT COUNT(*) FROM outbox_messages WHERE type='projects.task.moved' AND JSON_UNQUOTE(JSON_EXTRACT(payload,'$.organizationId'))='${ORG7}' AND JSON_EXTRACT(payload,'$.via') IS NOT NULL`,
+  );
+  check(movedVia === '0', `los movimientos a mano no llevan via (${movedVia})`);
+  const byForm = sql(
+    `SELECT COUNT(*) FROM outbox_messages WHERE type='projects.task.created' AND JSON_UNQUOTE(JSON_EXTRACT(payload,'$.organizationId'))='${ORG7}' AND JSON_UNQUOTE(JSON_EXTRACT(payload,'$.via.id'))='${form7.json.id}'`,
+  );
+  check(byForm === '15', `las 15 solicitudes llevan via = el formulario (${byForm})`);
 } catch (err) {
   fail(`no se pudo consultar MySQL: ${err.message}`);
 }

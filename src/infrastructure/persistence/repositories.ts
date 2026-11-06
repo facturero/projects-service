@@ -1,5 +1,6 @@
 import { Op, type Transaction } from 'sequelize';
 import { withActor } from '@facturero/outbox-relay';
+import { currentOrigin } from '../../application/origin.js';
 import { sequelize } from './sequelize.js';
 import {
   ActivityModel,
@@ -929,6 +930,11 @@ function fieldRepository(tx?: Transaction): FieldRepository {
   };
 }
 
+function withOrigin(payload: Record<string, unknown>): Record<string, unknown> {
+  const origin = currentOrigin();
+  return origin && payload.via === undefined ? { ...payload, via: origin } : payload;
+}
+
 function outboxRepository(tx?: Transaction): OutboxRepository {
   return {
     async add(event: DomainEvent) {
@@ -938,8 +944,9 @@ function outboxRepository(tx?: Transaction): OutboxRepository {
           aggregate_type: event.aggregateType,
           aggregate_id: event.aggregateId,
           type: event.type,
-          // Actor, IP y request-id viajan en el contexto de la petición: la bitácora sabe QUIÉN hizo cada cosa.
-          payload: withActor(event.payload),
+          // Actor, IP y request-id viajan en el contexto de la petición: la bitácora sabe QUIÉN hizo cada cosa. Y si lo hizo una regla
+          // o un formulario en su nombre, `via` dice cuál (ver application/origin.ts).
+          payload: withActor(withOrigin(event.payload)),
           occurred_at: event.occurredAt,
           processed_at: null,
         },

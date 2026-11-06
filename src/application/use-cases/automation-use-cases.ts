@@ -18,6 +18,7 @@ import type { Actor, Project } from '../../domain/types.js';
 import { addDaysIso } from '../../domain/workload.js';
 import { loadProject } from '../access-context.js';
 import { recordActivity } from '../activity.js';
+import { runWithOrigin } from '../origin.js';
 import { formDeletedEvent, formSavedEvent, formSubmittedEvent, ruleAppliedEvent, ruleDeletedEvent, ruleSavedEvent } from '../events.js';
 import { type Clock, type IdGenerator, inTransaction, type UnitOfWorkGateway } from '../ports.js';
 import type { CollaborationUseCases } from './collaboration-use-cases.js';
@@ -146,7 +147,9 @@ export class AutomationUseCases {
         let error: string | null = null;
         const as = ruleActor(rule);
         try {
-          for (const action of rule.actions) await this.apply(as, rule, event, action);
+          await runWithOrigin({ type: 'rule', id: rule.id, name: rule.name }, async () => {
+            for (const action of rule.actions) await this.apply(as, rule, event, action);
+          });
         } catch (err) {
           error = err instanceof Error ? err.message : String(err);
         }
@@ -290,22 +293,25 @@ export class AutomationUseCases {
     const { title, lines, dueOn } = answersToTask(form.questions, input.title, input.answers);
     const owner: Actor = { organizationId: form.organizationId, userId: form.createdBy, permissions: [PERMISSION_READ, PERMISSION_CREATE] };
     const paragraphs = lines.map((text) => ({ type: 'paragraph', content: [{ type: 'text', text }] }));
+    const origin = { type: 'form' as const, id: form.id, name: form.title };
     let task;
     try {
-      task = await this.tasks.create(owner, {
+      task = await runWithOrigin(origin, () => this.tasks.create(owner, {
         title,
         descriptionDoc: paragraphs.length ? { type: 'doc', content: paragraphs } : null,
         projectId: form.projectId,
         sectionId: form.sectionId,
         assigneeUserId: form.assigneeUserId,
         dueOn,
-      });
+      }));
     } catch (err) {
       // Quien hizo el formulario perdió el permiso de editar el proyecto (o la sección ya no existe): el formulario ya no sirve.
       if (err instanceof ProjectRoleError) throw new FormNotFoundError('Este formulario ya no recibe solicitudes: avisa a quien lo creó.');
       throw err;
     }
-    if (actor.userId !== form.createdBy) await this.collaboration.addFollower(owner, task.id, actor.userId).catch(() => undefined);
+    if (actor.userId !== form.createdBy) {
+      await runWithOrigin(origin, () => this.collaboration.addFollower(owner, task.id, actor.userId)).catch(() => undefined);
+    }
     await inTransaction(this.gateway, async (uow) => {
       await uow.forms.incrementSubmissions(form.organizationId, form.id);
       await recordActivity(uow, actor, task, 'form_submitted', { form: form.title }, this.clock());
