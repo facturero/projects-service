@@ -3,10 +3,23 @@
 Ficha de diseño (fuente de verdad): `~/Documents/sg-obs/crm-proyect/servicios/projects-service.md`. Puerto **3020**, base
 `projects_db`, rama **`main`**, módulo `projects.tasks_kanban`.
 
-## Estado (2026-11-05)
+## Estado (2026-11-10)
 
-**Los 7 entregables construidos y verificados en local. Sin subir.** El repo de GitHub aún no existe. Pendientes de decisión del dueño: el
-correo de los avisos (entregable 2) y la dimensión «proyecto» en contabilidad (entregable 6).
+**En producción y a la venta.** Repo `facturero/projects-service` (rama `main`), los 7 entregables desplegados y probados con datos
+reales. El 2026-11-10 los cuatro módulos `projects.*` pasaron a «disponible» en el catálogo (migración
+`plugin-catalog-service/migrations/20261110120000-publish-projects-plugins.cjs`): el tablero a 4,99 USD/mes por organización; horas
+3,99, carga de trabajo 5,99 y facturar el proyecto 6,99.
+
+Hecho después de los 7 entregables (todo en producción):
+- **Correo de los avisos**: los 10 avisos de la campana también salen por correo (ver «Correo de los avisos» más abajo).
+- **Dimensión «proyecto» en contabilidad**: la factura de un proyecto se contabiliza con el proyecto (ver entregable 6).
+- **Recorrido guiado** al comprar el módulo (`useAppTour`, recorrido `projects`): sale solo después de activarlo en el catálogo y se
+  relanza desde el menú ⋯ de Mis tareas o de un proyecto.
+- Revisión de UI contra REGLAS-FRONT terminada (`frontend/docs/REVISION-PROYECTOS.md`): Ctrl+K con proyectos y tareas, anillo de
+  estados en el panel, calendario sobre `v-calendar`, teclado para mover tareas, filas legibles en el teléfono.
+
+Queda (decisión del dueño, no código pendiente): portafolios y objetivos (Goals) como módulo aparte, invitados externos (vía portal de
+clientes), vincular cotizaciones desde la pantalla (no hay módulo de cotizaciones), y un nivel gratuito o límites si se quisiera.
 
 ### Entregable 7 — reglas, formularios y panel
 
@@ -48,9 +61,10 @@ bloqueadas; `billing.invoice.issued` publicado dos veces → se procesa una; `bi
 emitido igual → las recupera). En la interfaz: configurar cliente y servicio, vista previa («Servicios profesionales — Conciliar bancos
 (1,52 h)», 1,52 × $25 = $38), crear el borrador (en Facturación: $38 + IVA 15 % $5,70 = $43,70, **sin emitir**), liberar con confirmación.
 
-**Pendiente, a decidir:** la «dimensión proyecto» hacia contabilidad (que el asiento de la factura lleve el proyecto como centro de costo)
-necesita que billing-service ponga el proyecto en `billing.invoice.issued` y que accounting-service lo use; no se hizo para no tocar esos
-servicios. Hoy la relación factura ↔ proyecto vive en projects-service (`project_invoices`).
+**Dimensión «proyecto» en contabilidad (hecho el 2026-11-10).** billing-service no se tocó: accounting-service escucha
+`projects.invoice.linked` (al crear el borrador) y `projects.invoice.issued`, anota factura → proyecto en su tabla `source_projects`, y
+al contabilizar `billing.invoice.issued` todas las líneas del asiento salen con ese proyecto (también el costo de ventas que la
+referencia y la reversa). Los informes contables aceptan `projectId`. Ver `accounting-service/IMPLEMENTATION.md`, punto 7.
 
 
 ### Entregable 5 — horas y carga de trabajo
@@ -151,7 +165,7 @@ soltar es el mismo `reschedule` que el cronograma, que sí se probó arrastrando
 | Campana: 8 proveedores solo de campana (asignada, mención, comentario, finalizada, vence, aprobación pedida y respondida, sumado a proyecto) | `notification-service/src/provider-config.json`; el consumidor ahora escucha proveedores SIN plantilla de correo | Hecho |
 | Tablero en vivo: aviso mínimo `projects.changed` a la organización | `api-gateway-node/src/realtime/projects-routing.ts` + hub; frontend `stores/projects.onRealtime` | Hecho |
 | Atajos de Asana: Tab+Q, Tab+M, Tab+C, Tab+D, Tab+L, Tab+K, Ctrl+Enter, «?» | `useViewShortcuts.ts`, `TaskDetailPanel.vue`, `ShortcutsDialog.vue` | Hecho |
-| **Correo** de estos avisos | — | **Pendiente** (ver abajo) |
+| **Correo** de estos avisos | `notification-service/src/application/project-mail.ts` + ruta interna de auth | Hecho (2026-11-10, ver abajo) |
 
 Verificado: 77 pruebas del servicio; `verify-projects.mjs` contra MySQL real con la sección 7 (20 «seguir» y 20 «me gusta» simultáneos
 → una sola fila cada uno con `INSERT IGNORE`, enlace `javascript:` rechazado con 422, mencionado en proyecto privado ve y comenta pero no
@@ -162,10 +176,13 @@ convertir en aprobación → asignarme → aprobar, adjuntar (subida real a MinI
 **Bug encontrado y corregido por la interfaz:** la lista de @menciones salía fuera de pantalla: el panel lateral se desliza con
 `transform` y eso convierte `position: fixed` en relativo al panel. Ahora la lista se lleva al `<body>` con `<Teleport>`.
 
-**Por qué no hay correo todavía.** notification-service manda UN correo por evento a una dirección que viene en el payload, y
-projects-service solo conoce ids de usuario (no correos). Hacerlo bien exige: (1) un endpoint interno nuevo en auth-service
-(`GET /internal/users/emails?ids=`, protegido con `INTERNAL_SERVICE_SECRET`) y (2) que el consumidor de notification-service mande un
-correo por destinatario respetando su preferencia `smtp`. Es un cambio de seguridad entre servicios: queda como decisión del dueño.
+**Correo de los avisos (hecho el 2026-11-10).** projects-service sigue publicando solo ids. notification-service, después de guardar la
+campana, pide los correos a auth-service (`GET /internal/organizations/:organizationId/contacts`, con `X-Internal-Secret`, acotado a la
+organización del evento: un id de otra empresa no da correo) y escribe a cada destinatario con el canal `smtp` activo en sus
+preferencias, nunca a quien causó el aviso. Por defecto llegan por correo: asignada, mención, vence pronto, aprobación pedida y
+decidida, y «te añadieron a un proyecto»; comentarios, finalizadas, desbloqueadas y estado del proyecto, solo campana. Es de mejor
+esfuerzo: si un correo falla no se reencola el evento (la campana ya quedó y se repetirían los que sí salieron). Orden de despliegue:
+auth antes que notification.
 
 ---
 
