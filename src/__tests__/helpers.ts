@@ -163,6 +163,22 @@ function repositories(state: () => State): Repositories {
           .filter((p) => allPrivate || p.visibility === 'organization' || mine.has(p.id))
           .map((p) => structuredClone(p));
       },
+      async statsByProjects(org, projectIds, today) {
+        // Lo mismo que la consulta agrupada de MySQL: tareas de primer nivel, sin borrar, colocadas en el proyecto.
+        const out = new Map<string, { total: number; completed: number; overdue: number; nextDueOn: string | null }>();
+        for (const pl of s().placements.values()) {
+          if (pl.organizationId !== org || !projectIds.includes(pl.projectId)) continue;
+          const t = s().tasks.get(pl.taskId);
+          if (!t || t.deletedAt || t.parentTaskId) continue;
+          const st = out.get(pl.projectId) ?? { total: 0, completed: 0, overdue: 0, nextDueOn: null };
+          st.total += 1;
+          if (t.completedAt) st.completed += 1;
+          else if (t.dueOn && t.dueOn < today) st.overdue += 1;
+          else if (t.dueOn && (!st.nextDueOn || t.dueOn < st.nextDueOn)) st.nextDueOn = t.dueOn;
+          out.set(pl.projectId, st);
+        }
+        return out;
+      },
       async save(p) {
         s().projects.set(p.id, structuredClone(p));
       },
@@ -177,6 +193,12 @@ function repositories(state: () => State): Repositories {
       },
       async listForUser(org, userId, projectIds) {
         return [...s().members.values()].filter((m) => m.organizationId === org && m.userId === userId && projectIds.includes(m.projectId)).map((m) => structuredClone(m));
+      },
+      async listByProjects(org, projectIds) {
+        return [...s().members.values()]
+          .filter((m) => m.organizationId === org && projectIds.includes(m.projectId))
+          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+          .map((m) => structuredClone(m));
       },
       async save(m) {
         s().members.set(memberKey(m.projectId, m.userId), structuredClone(m));

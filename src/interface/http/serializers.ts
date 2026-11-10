@@ -59,6 +59,7 @@ export const projectWithRoleDto = (r: ProjectWithRole) => ({
   myRole: r.myRole,
   isMember: r.isMember,
   latestStatus: r.latestStatus ? statusUpdateDto(r.latestStatus) : null,
+  ...(r.summary ? { summary: r.summary } : {}),
 });
 
 export function memberDto(m: ProjectMember) {

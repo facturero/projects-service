@@ -1,6 +1,6 @@
 import { effectiveRole, isOrgProjectAdmin, PERMISSION_CREATE } from '../../domain/access.js';
 import { ForbiddenError, VersionConflictError } from '../../domain/errors.js';
-import type { Repositories } from '../../domain/repositories.js';
+import type { ProjectTaskStats, Repositories } from '../../domain/repositories.js';
 import { rankBetween } from '../../domain/rank.js';
 import type {
   Actor,
@@ -24,6 +24,10 @@ import {
   sectionCreatedEvent,
 } from '../events.js';
 import { type Clock, type IdGenerator, inTransaction, type UnitOfWorkGateway } from '../ports.js';
+import { localNow } from './due-soon.js';
+
+/** Caras que lleva cada tarjeta de la lista de proyectos; el resto va como «+N». */
+export const MEMBER_PREVIEW = 5;
 
 export interface CreateProjectInput {
   name: string;
@@ -52,6 +56,14 @@ export interface ProjectWithRole {
   isMember: boolean;
   /** Último estado publicado («en riesgo»…), como el color de estado de los proyectos en Asana. */
   latestStatus: StatusUpdate | null;
+  /** Solo en la lista: lo que muestra la tarjeta (avance, vencidas, próxima entrega y caras). El detalle no lo trae. */
+  summary?: ProjectSummary;
+}
+
+export interface ProjectSummary extends ProjectTaskStats {
+  memberCount: number;
+  /** Hasta MEMBER_PREVIEW miembros, los administradores primero y luego por antigüedad. */
+  memberUserIds: string[];
 }
 
 export interface ProjectDetail extends ProjectWithRole {
@@ -64,6 +76,8 @@ export class ProjectUseCases {
     private readonly repos: Repositories,
     private readonly clock: Clock,
     private readonly newId: IdGenerator,
+    /** Zona de la organización: decide qué tarea cuenta como vencida «hoy» (igual que los avisos de vencimiento). */
+    private readonly timeZone = 'America/Guayaquil',
   ) {}
 
   /** Proyectos que el actor puede ver, con su rol en cada uno (para que la interfaz sepa qué botones mostrar). */
@@ -74,12 +88,29 @@ export class ProjectUseCases {
     });
     const memberships = await this.repos.members.listForUser(actor.organizationId, actor.userId, projects.map((p) => p.id));
     const mine = new Map(memberships.map((m) => [m.projectId, m]));
-    const latest = await this.repos.statusUpdates.latestByProjects(actor.organizationId, projects.map((p) => p.id));
+    const ids = projects.map((p) => p.id);
+    const today = localNow(this.clock(), this.timeZone).date;
+    const [latest, stats, members] = await Promise.all([
+      this.repos.statusUpdates.latestByProjects(actor.organizationId, ids),
+      this.repos.projects.statsByProjects(actor.organizationId, ids, today),
+      this.repos.members.listByProjects(actor.organizationId, ids),
+    ]);
+    const membersOf = new Map<string, ProjectMember[]>();
+    for (const m of members) membersOf.set(m.projectId, [...(membersOf.get(m.projectId) ?? []), m]);
     return projects
       .flatMap((project) => {
         const member = mine.get(project.id) ?? null;
         const myRole = effectiveRole(project, member, actor);
-        return myRole ? [{ project, myRole, isMember: member !== null, latestStatus: latest.get(project.id) ?? null }] : [];
+        if (!myRole) return [];
+        const team = membersOf.get(project.id) ?? [];
+        // Los administradores primero (son a quienes se pregunta por el proyecto); el resto en el orden en que entraron.
+        const faces = [...team.filter((m) => m.role === 'admin'), ...team.filter((m) => m.role !== 'admin')].slice(0, MEMBER_PREVIEW);
+        const summary: ProjectSummary = {
+          ...(stats.get(project.id) ?? { total: 0, completed: 0, overdue: 0, nextDueOn: null }),
+          memberCount: team.length,
+          memberUserIds: faces.map((m) => m.userId),
+        };
+        return [{ project, myRole, isMember: member !== null, latestStatus: latest.get(project.id) ?? null, summary }];
       })
       .sort((a, b) => a.project.name.localeCompare(b.project.name, 'es'));
   }

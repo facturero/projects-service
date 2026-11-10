@@ -2,6 +2,7 @@ import type { Actor, Task } from '../../domain/types.js';
 import { addDaysIso, mondayOf } from '../../domain/workload.js';
 import type { Clock } from '../ports.js';
 import type { TaskUseCases } from './task-use-cases.js';
+import { localNow } from './due-soon.js';
 
 export const DASHBOARD_WEEKS = 8;
 
@@ -25,11 +26,13 @@ export class DashboardUseCases {
   constructor(
     private readonly tasks: TaskUseCases,
     private readonly clock: Clock,
+    /** Zona de la organización. Con la fecha de UTC, desde las 19:00 de Ecuador el panel contaba como vencido lo de mañana. */
+    private readonly timeZone = 'America/Guayaquil',
   ) {}
 
   async dashboard(actor: Actor, projectId: string): Promise<ProjectDashboard> {
     const board = await this.tasks.board(actor, projectId);
-    const today = this.clock().toISOString().slice(0, 10);
+    const today = localNow(this.clock(), this.timeZone).date;
     const weekEnd = addDaysIso(mondayOf(today), 6);
     const cards = board.cards;
     const open = (t: Task) => t.completedAt === null;

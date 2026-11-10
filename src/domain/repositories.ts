@@ -40,7 +40,23 @@ export interface ProjectRepository {
    * La consulta filtra en la base para no traer los privados ajenos.
    */
   listVisible(organizationId: string, userId: string, opts: { status: ProjectStatus; allPrivate: boolean }): Promise<Project[]>;
+  /**
+   * Lo contado de las tareas de cada proyecto, para su tarjeta en la lista. Una sola consulta agrupada para todos: con una por
+   * proyecto, una organización con 40 proyectos haría 40 viajes a la base cada vez que alguien abre la lista. `today` es la fecha
+   * local de la organización (qué cuenta como vencida). Un proyecto sin tareas no aparece en el mapa.
+   */
+  statsByProjects(organizationId: string, projectIds: string[], today: string): Promise<Map<string, ProjectTaskStats>>;
   save(project: Project): Promise<void>;
+}
+
+/** Tareas de primer nivel de un proyecto (las del tablero; las subtareas no cuentan, igual que en el panel). */
+export interface ProjectTaskStats {
+  total: number;
+  completed: number;
+  /** Abiertas con fecha de entrega anterior a hoy. */
+  overdue: number;
+  /** La fecha de entrega más cercana, de hoy en adelante, entre las abiertas. */
+  nextDueOn: string | null;
 }
 
 export interface MemberRepository {
@@ -48,6 +64,8 @@ export interface MemberRepository {
   find(organizationId: string, projectId: string, userId: string): Promise<ProjectMember | null>;
   /** La membresía del usuario en cada uno de esos proyectos (para calcular su rol en todos de una vez). */
   listForUser(organizationId: string, userId: string, projectIds: string[]): Promise<ProjectMember[]>;
+  /** Los miembros de varios proyectos de una vez (para las caras de cada tarjeta de la lista). */
+  listByProjects(organizationId: string, projectIds: string[]): Promise<ProjectMember[]>;
   save(member: ProjectMember): Promise<void>;
   remove(organizationId: string, projectId: string, userId: string): Promise<void>;
 }

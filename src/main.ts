@@ -42,7 +42,7 @@ async function main(): Promise<void> {
   tasks.setRuleRunner((actor, events) => automation.run(actor, events));
   const app = createApp({
     useCases: {
-      projects: new ProjectUseCases(gateway, repos, clock, ids),
+      projects: new ProjectUseCases(gateway, repos, clock, ids, config.ORG_TIMEZONE),
       members: new MemberUseCases(gateway, repos, clock),
       sections: new SectionUseCases(gateway, clock, ids),
       tasks,
@@ -54,7 +54,7 @@ async function main(): Promise<void> {
       workload: new WorkloadUseCases(gateway, repos, clock),
       billing,
       automation,
-      dashboard: new DashboardUseCases(tasks, clock),
+      dashboard: new DashboardUseCases(tasks, clock, config.ORG_TIMEZONE),
     },
     corsOrigin: config.CORS_ORIGIN,
   });

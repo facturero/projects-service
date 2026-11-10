@@ -1561,6 +1561,16 @@ components:
             myRole: { $ref: '#/components/schemas/ProjectRole' }
             isMember: { type: boolean }
             latestStatus: { allOf: [{ $ref: '#/components/schemas/StatusUpdate' }], nullable: true }
+            summary:
+              description: Solo en GET /projects. Tareas de primer nivel (sin subtareas); «vencida» con la fecha de ORG_TIMEZONE.
+              type: object
+              properties:
+                total: { type: integer }
+                completed: { type: integer }
+                overdue: { type: integer }
+                nextDueOn: { type: string, format: date, nullable: true, description: 'Entrega abierta más cercana, de hoy en adelante' }
+                memberCount: { type: integer }
+                memberUserIds: { type: array, maxItems: 5, items: { type: string, format: uuid }, description: 'Administradores primero' }
     ProjectDetail:
       allOf:
         - $ref: '#/components/schemas/ProjectWithRole'

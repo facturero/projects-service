@@ -1,4 +1,4 @@
-import { Op, type Transaction } from 'sequelize';
+import { Op, QueryTypes, type Transaction } from 'sequelize';
 import { withActor } from '@facturero/outbox-relay';
 import { currentOrigin } from '../../application/origin.js';
 import { sequelize } from './sequelize.js';
@@ -51,6 +51,7 @@ import type {
   OutboxRepository,
   PlacementRepository,
   ProjectRepository,
+  ProjectTaskStats,
   Repositories,
   SectionRepository,
   SubtaskCount,
@@ -217,6 +218,37 @@ function projectRepository(tx?: Transaction): ProjectRepository {
       const rows = await ProjectModel.findAll({ where, transaction: tx });
       return rows.map(toProject);
     },
+    async statsByProjects(organizationId, projectIds, today) {
+      const out = new Map<string, ProjectTaskStats>();
+      if (projectIds.length === 0) return out;
+      // DATE_FORMAT y no la fecha tal cual: en una consulta cruda mysql2 devuelve un DATE como Date a medianoche LOCAL del
+      // proceso, y en un servidor en UTC eso corría el día. Como texto `YYYY-MM-DD` llega igual que el resto de fechas de la API.
+      const rows = (await sequelize.query(
+        `SELECT p.project_id AS projectId,
+                COUNT(*) AS total,
+                SUM(t.completed_at IS NOT NULL) AS completed,
+                SUM(t.completed_at IS NULL AND t.due_on < :today) AS overdue,
+                DATE_FORMAT(MIN(CASE WHEN t.completed_at IS NULL AND t.due_on >= :today THEN t.due_on END), '%Y-%m-%d') AS nextDueOn
+           FROM task_placements p
+           JOIN tasks t ON t.id = p.task_id AND t.organization_id = p.organization_id
+          WHERE p.organization_id = :organizationId
+            AND p.project_id IN (:projectIds)
+            AND t.deleted_at IS NULL
+            AND t.parent_task_id IS NULL
+          GROUP BY p.project_id`,
+        { replacements: { organizationId, projectIds: [...new Set(projectIds)], today }, type: QueryTypes.SELECT, transaction: tx },
+      )) as Array<{ projectId: string; total: number | string; completed: number | string | null; overdue: number | string | null; nextDueOn: string | null }>;
+      // SUM devuelve DECIMAL, que mysql2 entrega como texto: se pasa a número aquí y no en cada pantalla.
+      for (const r of rows) {
+        out.set(r.projectId, {
+          total: Number(r.total),
+          completed: Number(r.completed ?? 0),
+          overdue: Number(r.overdue ?? 0),
+          nextDueOn: r.nextDueOn ?? null,
+        });
+      }
+      return out;
+    },
     async save(p) {
       const values = {
         organization_id: p.organizationId,
@@ -259,6 +291,15 @@ function memberRepository(tx?: Transaction): MemberRepository {
       if (projectIds.length === 0) return [];
       const rows = await ProjectMemberModel.findAll({
         where: { organization_id: organizationId, user_id: userId, project_id: { [Op.in]: [...new Set(projectIds)] } },
+        transaction: tx,
+      });
+      return rows.map(toMember);
+    },
+    async listByProjects(organizationId, projectIds) {
+      if (projectIds.length === 0) return [];
+      const rows = await ProjectMemberModel.findAll({
+        where: { organization_id: organizationId, project_id: { [Op.in]: [...new Set(projectIds)] } },
+        order: [['created_at', 'ASC']],
         transaction: tx,
       });
       return rows.map(toMember);
