@@ -23,7 +23,8 @@ describe('texto enriquecido (lista blanca)', () => {
   });
 
   it.each([
-    ['un nodo que el editor no produce (imagen, HTML)', doc({ type: 'image', attrs: { src: 'x' } })],
+    ['un nodo que el editor no produce (HTML)', doc({ type: 'html', content: [] })],
+    ['una imagen por URL y no por id de archivo', doc({ type: 'image', attrs: { src: 'https://evil.ec/x.png' } })],
     ['un enlace javascript:', doc(p({ type: 'text', text: 'x', marks: [{ type: 'link', attrs: { href: 'javascript:alert(1)' } }] }))],
     ['una marca no permitida', doc(p({ type: 'text', text: 'x', marks: [{ type: 'textStyle' }] }))],
     ['una mención con un id que no es uuid', doc(p({ type: 'mention', attrs: { id: '1 OR 1=1' } }))],
@@ -36,5 +37,28 @@ describe('texto enriquecido (lista blanca)', () => {
   it('una misma persona mencionada dos veces cuenta una sola vez', () => {
     const m = { type: 'mention', attrs: { id: ANA, label: 'Ana' } };
     expect(parseRichText(doc(p(m, { type: 'text', text: ' y ' }, m))).mentions).toEqual([ANA]);
+  });
+
+  it('acepta tablas: guarda solo el tamaño de las celdas y saca cada fila como una línea', () => {
+    const cell = (type: string, text: string, attrs: unknown = { colspan: 1, rowspan: 1, colwidth: null }) => ({ type, attrs, content: [p({ type: 'text', text })] });
+    const out = parseRichText(
+      doc({
+        type: 'table',
+        content: [
+          { type: 'tableRow', content: [cell('tableHeader', 'Producto'), cell('tableHeader', 'Cantidad', { colspan: 1, rowspan: 1, colwidth: [120], style: 'x' })] },
+          { type: 'tableRow', content: [cell('tableCell', 'Tornillos'), cell('tableCell', '40', { colspan: 99, rowspan: 'x' })] },
+        ],
+      }),
+    );
+    expect(out.text).toBe('Producto\tCantidad\nTornillos\t40');
+    const second = (out.doc.content as Array<{ content: Array<{ content: Array<{ attrs: unknown }> }> }>)[0]!.content;
+    expect(second[0]!.content[1]!.attrs).toEqual({ colspan: 1, rowspan: 1, colwidth: [120] });
+    expect(second[1]!.content[1]!.attrs).toEqual({ colspan: 1, rowspan: 1, colwidth: null });
+  });
+
+  it('acepta imágenes por id de archivo y descarta su URL (caduca)', () => {
+    const id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const out = parseRichText(doc({ type: 'image', attrs: { documentId: id.toUpperCase(), alt: 'plano.png', src: 'https://firmada' } }));
+    expect(out.doc).toEqual(doc({ type: 'image', attrs: { documentId: id, alt: 'plano.png' } }));
   });
 });

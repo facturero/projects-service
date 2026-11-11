@@ -12,7 +12,10 @@ import type { RichDoc } from './types.js';
  */
 export class RichTextError extends Error {}
 
-const BLOCKS = new Set(['doc', 'paragraph', 'bulletList', 'orderedList', 'listItem', 'blockquote', 'codeBlock']);
+const BLOCKS = new Set(['doc', 'paragraph', 'bulletList', 'orderedList', 'listItem', 'blockquote', 'codeBlock', 'table', 'tableRow', 'tableHeader', 'tableCell', 'image']);
+/** Celdas de tabla: solo su tamaño (cuántas columnas/filas ocupa y el ancho que dejó la persona), en números acotados. */
+const CELLS = new Set(['tableHeader', 'tableCell']);
+const MAX_SPAN = 20;
 const INLINE = new Set(['text', 'hardBreak', 'mention']);
 const MARKS = new Set(['bold', 'italic', 'strike', 'code', 'link']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -37,6 +40,7 @@ export function parseRichText(input: unknown): ParsedRichText {
   const mentions: string[] = [];
   const lines: string[] = [];
   let line = '';
+  let inCell = 0;
 
   const flush = () => {
     lines.push(line);
@@ -78,6 +82,24 @@ export function parseRichText(input: unknown): ParsedRichText {
       return out;
     }
 
+    if (type === 'image') {
+      // La imagen guarda el id del archivo en document-service, NO su URL: la URL firmada caduca en una hora y el navegador pide una
+      // nueva con la sesión al mostrarla (así, además, una imagen de otra empresa no se ve aunque alguien copie el documento).
+      const attrs = (node.attrs ?? {}) as { documentId?: unknown; alt?: unknown };
+      if (typeof attrs.documentId !== 'string' || !UUID.test(attrs.documentId)) throw new RichTextError('Imagen inválida.');
+      out.attrs = { documentId: attrs.documentId.toLowerCase(), alt: typeof attrs.alt === 'string' ? attrs.alt.slice(0, 200) : '' };
+      return out;
+    }
+
+    if (CELLS.has(type) && node.attrs !== undefined) {
+      const attrs = node.attrs as { colspan?: unknown; rowspan?: unknown; colwidth?: unknown };
+      const span = (v: unknown) => (typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= MAX_SPAN ? v : 1);
+      const widths = Array.isArray(attrs.colwidth) && attrs.colwidth.every((w) => typeof w === 'number' && Number.isInteger(w) && w > 0 && w <= 2000)
+        ? (attrs.colwidth as number[]).slice(0, MAX_SPAN)
+        : null;
+      out.attrs = { colspan: span(attrs.colspan), rowspan: span(attrs.rowspan), colwidth: widths };
+    }
+
     if (type === 'orderedList' && node.attrs !== undefined) {
       const start = (node.attrs as { start?: unknown }).start;
       if (typeof start === 'number' && Number.isInteger(start) && start > 0 && start < 10_000) out.attrs = { start };
@@ -85,9 +107,19 @@ export function parseRichText(input: unknown): ParsedRichText {
 
     if (node.content !== undefined) {
       if (!Array.isArray(node.content)) throw new RichTextError('Formato de texto inválido.');
+      if (CELLS.has(type)) inCell += 1;
       out.content = node.content.map((child) => walk(child, depth + 1));
+      if (CELLS.has(type)) inCell -= 1;
     }
-    if (type === 'paragraph' || type === 'codeBlock') flush();
+    // Cada fila de una tabla es una línea del texto plano (búsqueda y avisos), con sus celdas separadas por tabuladores.
+    if (type === 'paragraph' || type === 'codeBlock') {
+      if (inCell > 0) line += '\t';
+      else flush();
+    }
+    if (type === 'tableRow') {
+      line = line.replace(/\t+$/, '');
+      flush();
+    }
     return out;
   }
 
