@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { MAX_FIELDS_PER_PROJECT, normalizeOptions, validateFieldValue } from '../../domain/fields.js';
-import { AppError, ValidationError } from '../../domain/errors.js';
+import { PERMISSION_TAG_MANAGE } from '../../domain/access.js';
+import { AppError, ForbiddenError, ValidationError } from '../../domain/errors.js';
 import { rankBetween } from '../../domain/rank.js';
 import type { Repositories } from '../../domain/repositories.js';
 import type { Actor, CustomField, FieldType, LinkEntity, ProjectColor, Tag, Task, TaskLink } from '../../domain/types.js';
@@ -13,6 +14,8 @@ import {
   linkAddedEvent,
   linkRemovedEvent,
   tagCreatedEvent,
+  tagDeletedEvent,
+  tagUpdatedEvent,
   taskFieldSetEvent,
   taskTaggedEvent,
   taskUntaggedEvent,
@@ -34,8 +37,8 @@ export class NotFoundError extends AppError {
  * etiquetas de la organización y campos personalizados de cada proyecto.
  *
  * Quién puede: vincular, etiquetar y llenar un campo lo hace quien puede EDITAR la tarea; definir los campos de un proyecto, un
- * editor o administrador de ese proyecto; crear una etiqueta, cualquiera que use el módulo (son de toda la organización, como en
- * Asana).
+ * editor o administrador de ese proyecto. Las etiquetas son de toda la organización: crearlas, renombrarlas, cambiarles el color y
+ * borrarlas pide `project_tag:manage` (ver `domain/access.ts`); ponerlas en una tarea, solo poder editar esa tarea.
  */
 export class OrganizeUseCases {
   constructor(
@@ -99,12 +102,20 @@ export class OrganizeUseCases {
 
   // ── Etiquetas ─────────────────────────────────────────────────────────────
 
-  async listTags(actor: Actor): Promise<Tag[]> {
-    return this.repos.tags.list(actor.organizationId);
+  async listTags(actor: Actor): Promise<Array<Tag & { taskCount: number }>> {
+    const [tags, usage] = await Promise.all([this.repos.tags.list(actor.organizationId), this.repos.tags.usage(actor.organizationId)]);
+    return tags.map((t) => ({ ...t, taskCount: usage.get(t.id) ?? 0 }));
+  }
+
+  private assertCanManageTags(actor: Actor): void {
+    if (!actor.permissions.includes(PERMISSION_TAG_MANAGE)) {
+      throw new ForbiddenError('Crear, cambiar o eliminar etiquetas es de quien administra las etiquetas (permiso «Administrar etiquetas»).');
+    }
   }
 
   /** Crea la etiqueta, o devuelve la que ya existe con ese nombre (sin distinguir mayúsculas): nadie termina con «Urgente» y «urgente». */
   async createTag(actor: Actor, input: { name: string; color?: ProjectColor }): Promise<Tag> {
+    this.assertCanManageTags(actor);
     const name = input.name.trim();
     if (!name || name.length > 60) throw new ValidationError([{ field: 'name', message: 'Entre 1 y 60 caracteres.' }]);
     return inTransaction(this.gateway, async (uow) => {
@@ -119,6 +130,38 @@ export class OrganizeUseCases {
       }
       await uow.outbox.add(tagCreatedEvent(tag));
       return tag;
+    });
+  }
+
+  /** Renombrar o cambiar el color: afecta a todas las tareas que la llevan. Un nombre que ya usa otra etiqueta se rechaza. */
+  async updateTag(actor: Actor, tagId: string, input: { name?: string; color?: ProjectColor }): Promise<Tag> {
+    this.assertCanManageTags(actor);
+    const name = input.name?.trim();
+    if (name !== undefined && (!name || name.length > 60)) throw new ValidationError([{ field: 'name', message: 'Entre 1 y 60 caracteres.' }]);
+    return inTransaction(this.gateway, async (uow) => {
+      const previous = await uow.tags.findById(actor.organizationId, tagId);
+      if (!previous) throw new NotFoundError('TAG_NOT_FOUND', 'Etiqueta no encontrada.');
+      const next: Tag = { ...previous, name: name ?? previous.name, color: input.color ?? previous.color };
+      if (next.name === previous.name && next.color === previous.color) return previous;
+      const taken = name ? await uow.tags.findByName(actor.organizationId, name) : null;
+      if ((taken && taken.id !== tagId) || !(await uow.tags.update(next))) {
+        throw new ValidationError([{ field: 'name', message: 'Ya hay otra etiqueta con ese nombre.' }]);
+      }
+      await uow.outbox.add(tagUpdatedEvent(next, previous));
+      return next;
+    });
+  }
+
+  /** La quita de todas las tareas que la llevan. Devuelve en cuántas estaba. */
+  async deleteTag(actor: Actor, tagId: string): Promise<{ taskCount: number }> {
+    this.assertCanManageTags(actor);
+    return inTransaction(this.gateway, async (uow) => {
+      const tag = await uow.tags.findById(actor.organizationId, tagId);
+      if (!tag) throw new NotFoundError('TAG_NOT_FOUND', 'Etiqueta no encontrada.');
+      const taskCount = (await uow.tags.usage(actor.organizationId)).get(tag.id) ?? 0;
+      await uow.tags.remove(actor.organizationId, tag.id);
+      await uow.outbox.add(tagDeletedEvent(tag, taskCount));
+      return { taskCount };
     });
   }
 

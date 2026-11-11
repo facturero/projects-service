@@ -1,4 +1,4 @@
-import { Op, QueryTypes, type Transaction } from 'sequelize';
+import { col, fn, Op, QueryTypes, type Transaction, UniqueConstraintError } from 'sequelize';
 import { withActor } from '@facturero/outbox-relay';
 import { currentOrigin } from '../../application/origin.js';
 import { sequelize } from './sequelize.js';
@@ -891,6 +891,31 @@ function tagRepository(tx?: Transaction): TagRepository {
     },
     async detach(organizationId, taskId, tagId) {
       return (await TaskTagModel.destroy({ where: { organization_id: organizationId, task_id: taskId, tag_id: tagId }, transaction: tx })) > 0;
+    },
+    async update(t) {
+      try {
+        await TagModel.update({ name: t.name, color: t.color }, { where: { id: t.id, organization_id: t.organizationId }, transaction: tx });
+        return true;
+      } catch (err) {
+        // Otra petición tomó ese nombre entre la comprobación y el UPDATE: el índice único (organización, nombre) lo frena.
+        if (err instanceof UniqueConstraintError) return false;
+        throw err;
+      }
+    },
+    async remove(organizationId, id) {
+      // Los vínculos con tareas se borran a mano además de por la cascada: así no depende de que la clave foránea exista en cada base.
+      await TaskTagModel.destroy({ where: { organization_id: organizationId, tag_id: id }, transaction: tx });
+      return (await TagModel.destroy({ where: { id, organization_id: organizationId }, transaction: tx })) > 0;
+    },
+    async usage(organizationId) {
+      const rows = (await TaskTagModel.findAll({
+        attributes: ['tag_id', [fn('COUNT', col('task_id')), 'n']],
+        where: { organization_id: organizationId },
+        group: ['tag_id'],
+        raw: true,
+        transaction: tx,
+      })) as unknown as Array<{ tag_id: string; n: number | string }>;
+      return new Map(rows.map((r) => [r.tag_id, Number(r.n)]));
     },
   };
 }

@@ -238,6 +238,16 @@ export const linkRemovedEvent = (t: Task, l: TaskLink, projectIds: string[]) =>
 
 export const tagCreatedEvent = (tag: Tag) =>
   domainEvent({ type: 'projects.tag.created', aggregateType: 'tag', aggregateId: tag.id, organizationId: tag.organizationId, payload: { tagId: tag.id, name: tag.name, color: tag.color } });
+export const tagUpdatedEvent = (tag: Tag, previous: Tag) =>
+  domainEvent({
+    type: 'projects.tag.updated',
+    aggregateType: 'tag',
+    aggregateId: tag.id,
+    organizationId: tag.organizationId,
+    payload: { tagId: tag.id, name: tag.name, color: tag.color, previousName: previous.name, previousColor: previous.color },
+  });
+export const tagDeletedEvent = (tag: Tag, taskCount: number) =>
+  domainEvent({ type: 'projects.tag.deleted', aggregateType: 'tag', aggregateId: tag.id, organizationId: tag.organizationId, payload: { tagId: tag.id, name: tag.name, taskCount } });
 export const taskTaggedEvent = (t: Task, tag: Tag, projectIds: string[]) => taskEvent('projects.task.tagged', t, { tagId: tag.id, tagName: tag.name, projectIds });
 export const taskUntaggedEvent = (t: Task, tag: Tag, projectIds: string[]) => taskEvent('projects.task.untagged', t, { tagId: tag.id, tagName: tag.name, projectIds });
 

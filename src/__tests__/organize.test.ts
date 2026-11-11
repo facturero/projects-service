@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { ProjectRoleError, ValidationError } from '../domain/errors.js';
+import { ForbiddenError, ProjectRoleError, ValidationError } from '../domain/errors.js';
 import { TEMPLATES } from '../domain/templates.js';
-import { ANA, BETO, actor, projectWithSections, readOnly, setup } from './helpers.js';
+import { ANA, BETO, actor, projectWithSections, readOnly, setup, tagAdmin } from './helpers.js';
 
 const CUSTOMER = '99999999-0000-4000-8000-000000000001';
 
@@ -34,14 +34,51 @@ describe('vínculos con el ERP', () => {
 describe('etiquetas', () => {
   it('«Urgente» y «urgente» son la misma etiqueta; poner y quitar publica sus eventos', async () => {
     const { useCases: uc, store } = setup();
-    const t1 = await uc.organize.createTag(actor(ANA), { name: 'Urgente', color: 'error' });
-    const t2 = await uc.organize.createTag(actor(BETO), { name: 'urgente' });
+    const t1 = await uc.organize.createTag(tagAdmin(ANA), { name: 'Urgente', color: 'error' });
+    const t2 = await uc.organize.createTag(tagAdmin(BETO), { name: 'urgente' });
     expect(t2.id).toBe(t1.id);
     const task = await uc.tasks.create(actor(ANA), { title: 'T' });
     expect((await uc.organize.setTag(actor(ANA), task.id, t1.id, true)).map((t) => t.name)).toEqual(['Urgente']);
     expect(await uc.organize.setTag(actor(ANA), task.id, t1.id, false)).toEqual([]);
     expect(store.events('projects.task.tagged')).toHaveLength(1);
     expect(store.events('projects.task.untagged')).toHaveLength(1);
+  });
+
+  it('crear, renombrar, cambiar el color y eliminar piden «Administrar etiquetas»; poner una existente, solo poder editar la tarea', async () => {
+    const { useCases: uc } = setup();
+    const tag = await uc.organize.createTag(tagAdmin(ANA), { name: 'Urgente', color: 'error' });
+    await expect(uc.organize.createTag(actor(BETO), { name: 'Mía' })).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(uc.organize.createTag(readOnly(BETO), { name: 'Mía' })).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(uc.organize.updateTag(actor(BETO), tag.id, { name: 'Basura' })).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(uc.organize.deleteTag(actor(BETO), tag.id)).rejects.toBeInstanceOf(ForbiddenError);
+    const task = await uc.tasks.create(actor(BETO), { title: 'Mía' });
+    expect((await uc.organize.setTag(actor(BETO), task.id, tag.id, true)).map((t) => t.name)).toEqual(['Urgente']);
+  });
+
+  it('renombrar y cambiar el color: se ve en todas las tareas; un nombre repetido se rechaza; publica el cambio', async () => {
+    const { useCases: uc, store } = setup();
+    const urgente = await uc.organize.createTag(tagAdmin(ANA), { name: 'Urgente', color: 'error' });
+    await uc.organize.createTag(tagAdmin(ANA), { name: 'Cliente' });
+    const task = await uc.tasks.create(actor(ANA), { title: 'T' });
+    await uc.organize.setTag(actor(ANA), task.id, urgente.id, true);
+    const changed = await uc.organize.updateTag(tagAdmin(ANA), urgente.id, { name: 'Prioridad', color: 'warning' });
+    expect(changed).toMatchObject({ name: 'Prioridad', color: 'warning' });
+    expect((await uc.tasks.get(actor(ANA), task.id)).tags.map((t) => [t.name, t.color])).toEqual([['Prioridad', 'warning']]);
+    await expect(uc.organize.updateTag(tagAdmin(ANA), urgente.id, { name: 'cliente' })).rejects.toBeInstanceOf(ValidationError);
+    expect(store.events('projects.tag.updated')[0]!.payload).toMatchObject({ name: 'Prioridad', previousName: 'Urgente', color: 'warning', previousColor: 'error' });
+  });
+
+  it('eliminar la quita de todas las tareas, dice en cuántas estaba y la lista cuenta el uso', async () => {
+    const { useCases: uc, store } = setup();
+    const tag = await uc.organize.createTag(tagAdmin(ANA), { name: 'Vieja' });
+    for (const title of ['A', 'B']) {
+      const t = await uc.tasks.create(actor(ANA), { title });
+      await uc.organize.setTag(actor(ANA), t.id, tag.id, true);
+    }
+    expect((await uc.organize.listTags(actor(BETO))).find((t) => t.id === tag.id)?.taskCount).toBe(2);
+    expect(await uc.organize.deleteTag(tagAdmin(ANA), tag.id)).toEqual({ taskCount: 2 });
+    expect(await uc.organize.listTags(actor(ANA))).toEqual([]);
+    expect(store.events('projects.tag.deleted')[0]!.payload).toMatchObject({ name: 'Vieja', taskCount: 2 });
   });
 });
 
@@ -126,7 +163,7 @@ describe('plantillas y duplicar', () => {
     const { useCases: uc } = setup();
     const { project } = await projectWithSections(uc, actor(ANA));
     const f = await uc.organize.createField(actor(ANA), project.id, { name: 'Etapa', type: 'select', options: [{ label: 'Uno' }] });
-    const tag = await uc.organize.createTag(actor(ANA), { name: 'Mensual' });
+    const tag = await uc.organize.createTag(tagAdmin(ANA), { name: 'Mensual' });
     const a = await uc.tasks.create(actor(ANA), { title: 'Conciliar', projectId: project.id, assigneeUserId: BETO, dueOn: '2026-11-30' });
     const b = await uc.tasks.create(actor(ANA), { title: 'Declarar', projectId: project.id });
     await uc.tasks.create(actor(ANA), { title: 'Paso', parentTaskId: a.id });

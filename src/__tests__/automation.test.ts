@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { FormNotFoundError } from '../application/use-cases/automation-use-cases.js';
 import { answersToTask, ruleMatches, validateActions } from '../domain/automation.js';
 import { ProjectRoleError, ValidationError } from '../domain/errors.js';
-import { ANA, BETO, CARLA, actor, projectWithSections, setup } from './helpers.js';
+import { ANA, BETO, CARLA, actor, projectWithSections, setup, tagAdmin } from './helpers.js';
 
 describe('reglas y formularios: dominio', () => {
   it('una regla coincide por proyecto, disparador y (si la tiene) sección', () => {
@@ -59,7 +59,7 @@ describe('reglas', () => {
   it('«al agregar en Por hacer: vence en 3 días y etiquetar»; las tareas de otra sección no la disparan', async () => {
     const { useCases: uc } = setup();
     const { project, sections } = await projectWithSections(uc, actor(ANA));
-    const tag = await uc.organize.createTag(actor(ANA), { name: 'Nueva' });
+    const tag = await uc.organize.createTag(tagAdmin(ANA), { name: 'Nueva' });
     await uc.automation.createRule(actor(ANA), project.id, {
       name: 'Recién llegadas',
       trigger: 'task_added',

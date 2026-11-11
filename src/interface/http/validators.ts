@@ -123,6 +123,9 @@ export const linkSchema = z.object({
 });
 export const tagSchema = z.object({ name: z.string().trim().min(1).max(60), color: z.enum(PROJECT_COLORS).optional() });
 export const taskTagSchema = z.object({ tagId: uuid });
+export const updateTagSchema = z
+  .object({ name: z.string().trim().min(1).max(60).optional(), color: z.enum(PROJECT_COLORS).optional() })
+  .refine((v) => v.name !== undefined || v.color !== undefined, { message: 'Indica el nombre o el color.' });
 const option = z.object({ id: uuid.nullable().optional(), label: z.string(), color: z.string().nullable().optional() });
 export const createFieldSchema = z.object({
   name: z.string().trim().min(1).max(60),

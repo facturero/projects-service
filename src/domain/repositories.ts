@@ -182,6 +182,12 @@ export interface TagRepository {
   listForTasks(organizationId: string, taskIds: string[]): Promise<Map<string, Tag[]>>;
   attach(organizationId: string, taskId: string, tagId: string, at: Date): Promise<boolean>;
   detach(organizationId: string, taskId: string, tagId: string): Promise<boolean>;
+  /** Cambia nombre y color. false si el nombre choca con otra etiqueta de la organización (índice único). */
+  update(tag: Tag): Promise<boolean>;
+  /** Borra la etiqueta; sus vínculos con tareas caen con ella (clave foránea en cascada). */
+  remove(organizationId: string, id: string): Promise<boolean>;
+  /** En cuántas tareas está cada etiqueta (para avisar antes de borrar una muy usada). */
+  usage(organizationId: string): Promise<Map<string, number>>;
 }
 
 export interface FieldRepository {

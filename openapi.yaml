@@ -633,13 +633,24 @@ paths:
 
   /projects/tags:
     get:
-      summary: Etiquetas de la organización
+      summary: Etiquetas de la organización, con en cuántas tareas está cada una
       responses:
         '200':
           description: Etiquetas por nombre
-          content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Tag' } } } } } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      allOf:
+                        - { $ref: '#/components/schemas/Tag' }
+                        - { type: object, properties: { taskCount: { type: integer } } }
     post:
       summary: Crear una etiqueta; si ya existe una con el mismo nombre (sin distinguir mayúsculas) devuelve esa
+      description: Pide el permiso `project_tag:manage` (las etiquetas son de toda la organización).
       requestBody:
         required: true
         content:
@@ -652,7 +663,38 @@ paths:
                 color: { type: string, enum: [primary, secondary, success, warning, error, info] }
       responses:
         '201': { description: Etiqueta, content: { application/json: { schema: { $ref: '#/components/schemas/Tag' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '422': { $ref: '#/components/responses/Validation' }
+
+  /projects/tags/{tagId}:
+    parameters:
+      - { in: path, name: tagId, required: true, schema: { type: string, format: uuid } }
+    patch:
+      summary: Renombrar una etiqueta o cambiarle el color (en todas las tareas que la llevan)
+      description: Pide el permiso `project_tag:manage`. Un nombre que ya usa otra etiqueta de la organización da 422.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 60 }
+                color: { type: string, enum: [primary, secondary, success, warning, error, info] }
+      responses:
+        '200': { description: Etiqueta cambiada, content: { application/json: { schema: { $ref: '#/components/schemas/Tag' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Validation' }
+    delete:
+      summary: Eliminar una etiqueta (se quita de todas las tareas)
+      description: Pide el permiso `project_tag:manage`.
+      responses:
+        '200':
+          description: En cuántas tareas estaba
+          content: { application/json: { schema: { type: object, properties: { taskCount: { type: integer } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /projects/linked/{entityType}/{entityId}:
     parameters:

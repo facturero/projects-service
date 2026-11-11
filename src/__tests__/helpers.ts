@@ -481,6 +481,24 @@ function repositories(state: () => State): Repositories {
       async detach(org, taskId, tagId) {
         return s().taskTags.delete(`${taskId}:${tagId}`);
       },
+      async update(t) {
+        const clash = [...s().tags.values()].some((x) => x.organizationId === t.organizationId && x.id !== t.id && x.name.toLowerCase() === t.name.toLowerCase());
+        if (clash) return false;
+        const cur = s().tags.get(t.id);
+        if (cur && cur.organizationId === t.organizationId) s().tags.set(t.id, { ...cur, name: t.name, color: t.color });
+        return true;
+      },
+      async remove(org, id) {
+        const cur = s().tags.get(id);
+        if (!cur || cur.organizationId !== org) return false;
+        for (const [k, tt] of s().taskTags) if (tt.tagId === id) s().taskTags.delete(k);
+        return s().tags.delete(id);
+      },
+      async usage(org) {
+        const out = new Map<string, number>();
+        for (const tt of s().taskTags.values()) if (tt.organizationId === org) out.set(tt.tagId, (out.get(tt.tagId) ?? 0) + 1);
+        return out;
+      },
     },
     fields: {
       async listByProjects(org, ids) {
@@ -747,6 +765,8 @@ export const actor = (userId: string, opts: { org?: string; permissions?: string
 });
 export const orgAdmin = (userId: string) => actor(userId, { permissions: [...BASE, 'project:admin'] });
 export const readOnly = (userId: string) => actor(userId, { permissions: ['project:read'] });
+/** Quien administra las etiquetas de la organización (permiso `project_tag:manage`). */
+export const tagAdmin = (userId: string) => actor(userId, { permissions: [...BASE, 'project_tag:manage'] });
 
 export function setup() {
   const store = new InMemoryStore();

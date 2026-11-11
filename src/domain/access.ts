@@ -17,6 +17,13 @@ const RANK: Record<ProjectRole, number> = { viewer: 0, commenter: 1, editor: 2, 
 export const PERMISSION_READ = 'project:read';
 export const PERMISSION_CREATE = 'project:create';
 export const PERMISSION_ADMIN = 'project:admin';
+/**
+ * Crear, renombrar, cambiar de color y eliminar etiquetas. Son de TODA la organización: sin este permiso cualquiera con
+ * `project:read` (incluso «Solo lectura») podía crear etiquetas para todos, y quien pudiera editarlas habría podido renombrar
+ * «Urgente» a otra cosa o borrarla de cientos de tareas ajenas. Poner y quitar una etiqueta existente en una tarea sigue siendo de
+ * quien puede editar esa tarea.
+ */
+export const PERMISSION_TAG_MANAGE = 'project_tag:manage';
 
 export function isOrgProjectAdmin(actor: Actor): boolean {
   return actor.permissions.includes(PERMISSION_ADMIN);

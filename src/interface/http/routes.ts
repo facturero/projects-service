@@ -67,6 +67,7 @@ import {
   linkSchema,
   tagSchema,
   taskTagSchema,
+  updateTagSchema,
   updateFieldSchema,
   commentSchema,
   createProjectSchema,
@@ -322,9 +323,16 @@ export function projectRoutes(deps: AppDependencies): Hono<Env> {
     return c.json(projectDto(await workspace.createFromTemplate(actorOf(c), await parseBody(c, fromTemplateSchema))), 201);
   });
 
-  r.get('/projects/tags', async (c) => c.json({ items: (await organize.listTags(actorOf(c))).map(tagDto) }));
+  r.get('/projects/tags', async (c) => c.json({ items: (await organize.listTags(actorOf(c))).map((t) => ({ ...tagDto(t), taskCount: t.taskCount })) }));
 
   r.post('/projects/tags', async (c) => c.json(tagDto(await organize.createTag(actorOf(c), await parseBody(c, tagSchema))), 201));
+
+  r.patch('/projects/tags/:tagId', async (c) => {
+    const id = param(c, 'tagId', TaskNotFoundError);
+    return c.json(tagDto(await organize.updateTag(actorOf(c), id, await parseBody(c, updateTagSchema))));
+  });
+
+  r.delete('/projects/tags/:tagId', async (c) => c.json(await organize.deleteTag(actorOf(c), param(c, 'tagId', TaskNotFoundError))));
 
   r.get('/projects/linked/:entityType/:entityId', async (c) => {
     const type = c.req.param('entityType') as LinkEntity;

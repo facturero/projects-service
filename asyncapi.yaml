@@ -305,6 +305,32 @@ channels:
             tagId: { type: string, format: uuid }
             name: { type: string }
             color: { type: string }
+  projects.tag.updated:
+    publish:
+      summary: Se renombró una etiqueta o se le cambió el color
+      message:
+        payload:
+          type: object
+          required: [organizationId, tagId, name, color]
+          properties:
+            organizationId: { type: string, format: uuid }
+            tagId: { type: string, format: uuid }
+            name: { type: string }
+            color: { type: string }
+            previousName: { type: string }
+            previousColor: { type: string }
+  projects.tag.deleted:
+    publish:
+      summary: Se eliminó una etiqueta de la organización (y de todas sus tareas)
+      message:
+        payload:
+          type: object
+          required: [organizationId, tagId, name, taskCount]
+          properties:
+            organizationId: { type: string, format: uuid }
+            tagId: { type: string, format: uuid }
+            name: { type: string }
+            taskCount: { type: integer }
   projects.task.tagged:
     publish:
       summary: Se puso una etiqueta a una tarea
