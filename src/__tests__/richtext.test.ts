@@ -61,4 +61,12 @@ describe('texto enriquecido (lista blanca)', () => {
     const out = parseRichText(doc({ type: 'image', attrs: { documentId: id.toUpperCase(), alt: 'plano.png', src: 'https://firmada' } }));
     expect(out.doc).toEqual(doc({ type: 'image', attrs: { documentId: id, alt: 'plano.png' } }));
   });
+
+  it('acepta documentos por id de archivo: guarda nombre y tipo acotados y los saca al texto plano', () => {
+    const id = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const out = parseRichText(doc(p({ type: 'text', text: 'Ver' }), { type: 'file', attrs: { documentId: id, name: ' plantilla.xlsx ', mimeType: 'application/vnd.ms-excel', href: 'https://x' } }));
+    expect(out.doc).toEqual(doc(p({ type: 'text', text: 'Ver' }), { type: 'file', attrs: { documentId: id, name: 'plantilla.xlsx', mimeType: 'application/vnd.ms-excel' } }));
+    expect(out.text).toBe('Ver\n[plantilla.xlsx]');
+    expect(() => parseRichText(doc({ type: 'file', attrs: { name: 'x.pdf' } }))).toThrow(RichTextError);
+  });
 });

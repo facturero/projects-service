@@ -12,7 +12,7 @@ import type { RichDoc } from './types.js';
  */
 export class RichTextError extends Error {}
 
-const BLOCKS = new Set(['doc', 'paragraph', 'bulletList', 'orderedList', 'listItem', 'blockquote', 'codeBlock', 'table', 'tableRow', 'tableHeader', 'tableCell', 'image']);
+const BLOCKS = new Set(['doc', 'paragraph', 'bulletList', 'orderedList', 'listItem', 'blockquote', 'codeBlock', 'table', 'tableRow', 'tableHeader', 'tableCell', 'image', 'file']);
 /** Celdas de tabla: solo su tamaño (cuántas columnas/filas ocupa y el ancho que dejó la persona), en números acotados. */
 const CELLS = new Set(['tableHeader', 'tableCell']);
 const MAX_SPAN = 20;
@@ -88,6 +88,20 @@ export function parseRichText(input: unknown): ParsedRichText {
       const attrs = (node.attrs ?? {}) as { documentId?: unknown; alt?: unknown };
       if (typeof attrs.documentId !== 'string' || !UUID.test(attrs.documentId)) throw new RichTextError('Imagen inválida.');
       out.attrs = { documentId: attrs.documentId.toLowerCase(), alt: typeof attrs.alt === 'string' ? attrs.alt.slice(0, 200) : '' };
+      return out;
+    }
+
+    if (type === 'file') {
+      // Documento adjuntado desde la descripción o un comentario (Excel, PDF…): se ve como una ficha en el texto. Igual que la imagen,
+      // guarda el id del archivo y no un enlace; el nombre y el tipo solo sirven para pintar la ficha (icono y color).
+      const attrs = (node.attrs ?? {}) as { documentId?: unknown; name?: unknown; mimeType?: unknown };
+      if (typeof attrs.documentId !== 'string' || !UUID.test(attrs.documentId)) throw new RichTextError('Archivo inválido.');
+      const name = typeof attrs.name === 'string' && attrs.name.trim() ? attrs.name.trim().slice(0, 255) : 'archivo';
+      const mimeType = typeof attrs.mimeType === 'string' ? attrs.mimeType.slice(0, 120) : '';
+      out.attrs = { documentId: attrs.documentId.toLowerCase(), name, mimeType };
+      if (line) flush();
+      line = `[${name}]`;
+      flush();
       return out;
     }
 
