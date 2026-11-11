@@ -132,9 +132,16 @@ export interface TaskDetail {
   canComplete: boolean;
   /** Solo el responsable de una tarea de aprobación decide. */
   canDecide: boolean;
-  /** Horas registradas en la tarea (las ve quien ve la tarea, como el «tiempo real» de Asana), las más recientes primero. */
+  /**
+   * Horas registradas en la tarea Y en sus subtareas (las ve quien ve la tarea, como el «tiempo real» de Asana), las más recientes
+   * primero; cada una dice en qué tarea se registró. `actualMinutes` es el total (propias + subtareas): el tiempo que llevó la tarea
+   * entera, como pidió un cliente; `ownMinutes` y `subtasksMinutes`, el desglose; `subtaskMinutes`, lo de cada subtarea.
+   */
   timeEntries: TimeEntry[];
   actualMinutes: number;
+  ownMinutes: number;
+  subtasksMinutes: number;
+  subtaskMinutes: Map<string, number>;
   /** Registrar horas: el responsable o un editor (`complete`). */
   canLogTime: boolean;
 }
@@ -145,7 +152,7 @@ export interface BoardCard {
   subtasks: SubtaskCount;
   tags: Tag[];
   values: Record<string, FieldValue>;
-  /** Minutos registrados en la tarea. */
+  /** Minutos registrados en la tarea más los de sus subtareas. */
   actualMinutes: number;
 }
 
@@ -254,12 +261,13 @@ export class TaskUseCases {
     const tasks = await this.repos.tasks.findManyByIds(actor.organizationId, placements.map((p) => p.taskId));
     const byId = new Map(tasks.filter((t) => !t.deletedAt && !t.parentTaskId).map((t) => [t.id, t]));
     const ids = [...byId.keys()];
-    const [counts, tags, fields, values, minutes] = await Promise.all([
+    const [counts, tags, fields, values, minutes, subtaskMinutes] = await Promise.all([
       this.repos.tasks.subtaskCounts(actor.organizationId, ids),
       this.repos.tags.listForTasks(actor.organizationId, ids),
       this.repos.fields.listByProjects(actor.organizationId, [projectId]),
       this.repos.fields.valuesForTasks(actor.organizationId, ids),
       this.repos.timeEntries.totalsByTask(actor.organizationId, ids),
+      this.repos.timeEntries.totalsOfSubtasks(actor.organizationId, ids),
     ]);
     const ownFields = new Set(fields.map((f) => f.id));
     const valuesByTask = new Map<string, Record<string, FieldValue>>();
@@ -276,7 +284,8 @@ export class TaskUseCases {
         subtasks: counts.get(placement.taskId) ?? { total: 0, completed: 0 },
         tags: tags.get(placement.taskId) ?? [],
         values: valuesByTask.get(placement.taskId) ?? {},
-        actualMinutes: minutes.get(placement.taskId) ?? 0,
+        // El total de la tarjeta incluye lo registrado en sus subtareas: es el tiempo que llevó la tarea.
+        actualMinutes: (minutes.get(placement.taskId) ?? 0) + (subtaskMinutes.get(placement.taskId) ?? 0),
       }));
     const dependencies = (await this.repos.dependencies.listDependsOn(actor.organizationId, ids)).filter((d) => byId.has(d.dependsOnTaskId));
     return { project, myRole: role, sections: [...sections].sort(byRank), cards, dependencies, fields };
@@ -309,8 +318,15 @@ export class TaskUseCases {
       this.repos.tags.listForTasks(org, [id]),
       ctx.task.parentTaskId ? Promise.resolve([]) : this.repos.fields.listByProjects(org, visibleProjectIds),
       this.repos.fields.valuesForTasks(org, [id]),
-      this.repos.timeEntries.list(org, { taskId: id }, 500),
+      this.repos.timeEntries.list(org, { taskIds: [id, ...subtasks.map((s) => s.id)] }, 500),
     ]);
+    const subtaskMinutes = new Map<string, number>();
+    let ownMinutes = 0;
+    for (const e of timeEntries) {
+      if (e.taskId === id) ownMinutes += e.minutes;
+      else subtaskMinutes.set(e.taskId, (subtaskMinutes.get(e.taskId) ?? 0) + e.minutes);
+    }
+    const subtasksMinutes = [...subtaskMinutes.values()].reduce((n, m) => n + m, 0);
     const blockedByIds = new Set(dependsOn.map((d) => d.dependsOnTaskId));
     const blockingIds = new Set(dependents.map((d) => d.taskId));
 
@@ -346,7 +362,10 @@ export class TaskUseCases {
       canComplete: ctx.access.canComplete,
       canDecide: ctx.task.kind === 'approval' && ctx.task.assigneeUserId === actor.userId,
       timeEntries,
-      actualMinutes: timeEntries.reduce((n, e) => n + e.minutes, 0),
+      actualMinutes: ownMinutes + subtasksMinutes,
+      ownMinutes,
+      subtasksMinutes,
+      subtaskMinutes,
       canLogTime: ctx.access.canComplete,
     };
   }

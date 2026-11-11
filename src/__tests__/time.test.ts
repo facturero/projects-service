@@ -40,6 +40,31 @@ describe('registrar horas', () => {
     expect(store.events('projects.time_entry.logged')[0]!.payload).toMatchObject({ minutes: 90, projectIds: [project.id], userId: ANA });
   });
 
+  it('horas en subtareas: el total de la tarea las suma (detalle y tablero), con desglose; borrar la subtarea las saca del total', async () => {
+    const { useCases: uc } = setup();
+    const { project } = await projectWithSections(uc, actor(ANA));
+    const task = await uc.tasks.create(actor(ANA), { title: 'Web', projectId: project.id, assigneeUserId: ANA });
+    const s1 = await uc.tasks.create(actor(ANA), { title: 'Maqueta', parentTaskId: task.id, assigneeUserId: ANA });
+    const s2 = await uc.tasks.create(actor(ANA), { title: 'Textos', parentTaskId: task.id, assigneeUserId: ANA });
+    await uc.time.log(actor(ANA), { taskId: task.id, workedOn: '2026-11-04', minutes: 30 });
+    await uc.time.log(actor(ANA), { taskId: s1.id, workedOn: '2026-11-04', minutes: 60 });
+    await uc.time.log(actor(ANA), { taskId: s1.id, workedOn: '2026-11-05', minutes: 30 });
+    await uc.time.log(actor(ANA), { taskId: s2.id, workedOn: '2026-11-05', minutes: 45 });
+
+    const detail = await uc.tasks.get(actor(ANA), task.id);
+    expect(detail).toMatchObject({ actualMinutes: 165, ownMinutes: 30, subtasksMinutes: 135 });
+    expect(detail.subtaskMinutes.get(s1.id)).toBe(90);
+    expect(detail.subtaskMinutes.get(s2.id)).toBe(45);
+    expect(detail.timeEntries.map((e) => e.taskId).sort()).toEqual([task.id, s1.id, s1.id, s2.id].sort());
+    expect((await uc.tasks.board(actor(ANA), project.id)).cards.find((c) => c.task.id === task.id)!.actualMinutes).toBe(165);
+    // La subtarea, por su cuenta, solo cuenta lo suyo.
+    expect((await uc.tasks.get(actor(ANA), s1.id)).actualMinutes).toBe(90);
+
+    await uc.tasks.delete(actor(ANA), s2.id);
+    expect((await uc.tasks.board(actor(ANA), project.id)).cards.find((c) => c.task.id === task.id)!.actualMinutes).toBe(120);
+    expect((await uc.tasks.get(actor(ANA), task.id)).actualMinutes).toBe(120);
+  });
+
   it('quien no puede completar la tarea no registra horas; un registro fuera de rango o en otro proyecto es 422', async () => {
     const { useCases: uc } = setup();
     const { project } = await projectWithSections(uc, actor(ANA));

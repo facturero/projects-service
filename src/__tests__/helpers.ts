@@ -545,6 +545,7 @@ function repositories(state: () => State): Repositories {
               (!f.userId || e.userId === f.userId) &&
               (!f.projectId || e.projectId === f.projectId) &&
               (!f.taskId || e.taskId === f.taskId) &&
+              (!f.taskIds || f.taskIds.includes(e.taskId)) &&
               (f.billable === undefined || e.billable === f.billable) &&
               (!f.from || e.workedOn >= f.from) &&
               (!f.to || e.workedOn <= f.to),
@@ -557,6 +558,15 @@ function repositories(state: () => State): Repositories {
         const out = new Map<string, number>();
         for (const e of s().timeEntries.values()) {
           if (e.organizationId === org && taskIds.includes(e.taskId)) out.set(e.taskId, (out.get(e.taskId) ?? 0) + e.minutes);
+        }
+        return out;
+      },
+      async totalsOfSubtasks(org, parentTaskIds) {
+        const out = new Map<string, number>();
+        for (const e of s().timeEntries.values()) {
+          const t = s().tasks.get(e.taskId);
+          if (e.organizationId !== org || !t?.parentTaskId || t.deletedAt || !parentTaskIds.includes(t.parentTaskId)) continue;
+          out.set(t.parentTaskId, (out.get(t.parentTaskId) ?? 0) + e.minutes);
         }
         return out;
       },

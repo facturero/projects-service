@@ -206,6 +206,8 @@ export interface TimeEntryFilter {
   userId?: string;
   projectId?: string;
   taskId?: string;
+  /** Varias tareas a la vez (la tarea y sus subtareas, en el detalle). */
+  taskIds?: string[];
   /** Rango de días trabajados, inclusive. */
   from?: string;
   to?: string;
@@ -218,6 +220,8 @@ export interface TimeEntryRepository {
   list(organizationId: string, filter: TimeEntryFilter, limit: number): Promise<TimeEntry[]>;
   /** Minutos registrados por tarea («tiempo real» de Asana). */
   totalsByTask(organizationId: string, taskIds: string[]): Promise<Map<string, number>>;
+  /** Minutos registrados en las subtareas (no borradas) de cada tarea, por tarea madre: el total de una tarea los suma. */
+  totalsOfSubtasks(organizationId: string, parentTaskIds: string[]): Promise<Map<string, number>>;
   save(entry: TimeEntry): Promise<void>;
   delete(organizationId: string, id: string): Promise<boolean>;
   /** Facturables, cargadas al proyecto y sin reservar, en el rango (entregable 6). */

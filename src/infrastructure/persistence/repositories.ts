@@ -1046,6 +1046,7 @@ function timeEntryRepository(tx?: Transaction): TimeEntryRepository {
     if (f.userId) w.user_id = f.userId;
     if (f.projectId) w.project_id = f.projectId;
     if (f.taskId) w.task_id = f.taskId;
+    if (f.taskIds) w.task_id = { [Op.in]: f.taskIds.length ? [...new Set(f.taskIds)] : [''] };
     if (f.billable !== undefined) w.billable = f.billable;
     if (f.from || f.to) w.worked_on = { ...(f.from ? { [Op.gte]: f.from } : {}), ...(f.to ? { [Op.lte]: f.to } : {}) };
     return w;
@@ -1075,6 +1076,20 @@ function timeEntryRepository(tx?: Transaction): TimeEntryRepository {
         transaction: tx,
       })) as unknown as Array<{ task_id: string; total: string | number }>;
       for (const r of rows) out.set(r.task_id, Number(r.total));
+      return out;
+    },
+    async totalsOfSubtasks(organizationId, parentTaskIds) {
+      const out = new Map<string, number>();
+      if (parentTaskIds.length === 0) return out;
+      const rows = (await sequelize.query(
+        `SELECT t.parent_task_id AS parent, SUM(e.minutes) AS total
+           FROM time_entries e
+           JOIN tasks t ON t.id = e.task_id AND t.organization_id = e.organization_id
+          WHERE e.organization_id = :organizationId AND t.parent_task_id IN (:parents) AND t.deleted_at IS NULL
+          GROUP BY t.parent_task_id`,
+        { replacements: { organizationId, parents: [...new Set(parentTaskIds)] }, type: QueryTypes.SELECT, transaction: tx },
+      )) as Array<{ parent: string; total: string | number }>;
+      for (const r of rows) out.set(r.parent, Number(r.total));
       return out;
     },
     async save(e) {

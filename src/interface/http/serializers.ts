@@ -157,7 +157,7 @@ export function taskDetailDto(d: TaskDetail) {
     blockedBy: d.blockedBy,
     blocking: d.blocking,
     parent: d.parent,
-    subtasks: d.subtasks.map(taskDto),
+    subtasks: d.subtasks.map((s) => ({ ...taskDto(s), actualMinutes: d.subtaskMinutes.get(s.id) ?? 0 })),
     projects: d.projects,
     followers: d.followers,
     likedBy: d.likedBy,
@@ -170,6 +170,8 @@ export function taskDetailDto(d: TaskDetail) {
     canDecide: d.canDecide,
     timeEntries: d.timeEntries.map(timeEntryDto),
     actualMinutes: d.actualMinutes,
+    ownMinutes: d.ownMinutes,
+    subtasksMinutes: d.subtasksMinutes,
     canLogTime: d.canLogTime,
   };
 }
