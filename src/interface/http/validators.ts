@@ -21,7 +21,7 @@ import {
   type Visibility,
 } from '../../domain/types.js';
 
-const uuid = z.string().uuid();
+const uuid = z.string().guid();
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Fecha inválida (AAAA-MM-DD).');
 const name = z.string().trim().min(1, 'Obligatorio.').max(120, 'Máximo 120 caracteres.');
 const description = z.string().max(20_000, 'Máximo 20 000 caracteres.').nullable();
@@ -63,7 +63,7 @@ export const moveSectionSchema = z.object(position);
 const title = z.string().trim().min(1, 'Obligatorio.').max(500, 'Máximo 500 caracteres.');
 
 // El documento de TipTap llega como objeto y lo valida el dominio (`richtext.ts`, lista blanca): aquí solo se exige que sea un objeto.
-const richDoc = z.record(z.unknown());
+const richDoc = z.record(z.string(), z.unknown());
 
 /** Tiempo estimado: hasta 10 000 h, que ya es un proyecto, no una tarea. */
 const minutesEstimate = z.number().int().min(0).max(600_000);
@@ -242,17 +242,17 @@ export const ruleSchema = z.object({
   name: z.string().max(120),
   trigger: z.enum(['task_added', 'task_moved', 'task_completed']),
   triggerSectionId: uuid.nullable().default(null),
-  actions: z.array(z.record(z.unknown())).min(1).max(5),
+  actions: z.array(z.record(z.string(), z.unknown())).min(1).max(5),
   enabled: z.boolean().default(true),
 });
 
 export const formSchema = z.object({
   title: z.string().max(120),
   description: z.string().max(1000).nullable().default(null),
-  questions: z.array(z.record(z.unknown())).max(20),
+  questions: z.array(z.record(z.string(), z.unknown())).max(20),
   sectionId: uuid.nullable().default(null),
   assigneeUserId: uuid.nullable().default(null),
   enabled: z.boolean().default(true),
 });
 
-export const submitFormSchema = z.object({ title: z.string().max(500), answers: z.record(z.string().max(4000)).default({}) });
+export const submitFormSchema = z.object({ title: z.string().max(500), answers: z.record(z.string(), z.string().max(4000)).default({}) });
