@@ -16,6 +16,33 @@ export const PROJECT_VIEWS: readonly ProjectView[] = ['list', 'board'];
 export const PROJECT_COLORS = ['primary', 'secondary', 'success', 'warning', 'error', 'info'] as const;
 export type ProjectColor = (typeof PROJECT_COLORS)[number];
 
+/**
+ * Colores de etiqueta: los del tema y una paleta propia (tokens `tag-*` del tema en el frontend, `src/plugins/vuetify.ts`). Una
+ * organización puede tener muchas etiquetas y con cinco colores se repetían enseguida (lo pidió el dueño, 2026-11-26). La columna es
+ * texto (`tags.color`, VARCHAR 20): un color nuevo no necesita migración.
+ */
+export const TAG_COLORS = [
+  'primary',
+  'secondary',
+  'success',
+  'warning',
+  'error',
+  // `info` no se ofrece (se confunde con `primary`), pero lo aceptaban las etiquetas creadas antes: se sigue admitiendo.
+  'info',
+  'tag-red',
+  'tag-orange',
+  'tag-yellow',
+  'tag-lime',
+  'tag-green',
+  'tag-cyan',
+  'tag-violet',
+  'tag-purple',
+  'tag-pink',
+  'tag-brown',
+  'tag-grey',
+] as const;
+export type TagColor = (typeof TAG_COLORS)[number];
+
 export interface Project {
   id: string;
   organizationId: string;
@@ -192,7 +219,7 @@ export interface Tag {
   id: string;
   organizationId: string;
   name: string;
-  color: ProjectColor;
+  color: TagColor;
   createdBy: string;
   createdAt: Date;
 }

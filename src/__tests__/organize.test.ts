@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { ForbiddenError, ProjectRoleError, ValidationError } from '../domain/errors.js';
 import { TEMPLATES } from '../domain/templates.js';
+import { TAG_COLORS } from '../domain/types.js';
+import { tagSchema, updateTagSchema } from '../interface/http/validators.js';
 import { ANA, BETO, actor, projectWithSections, readOnly, setup, tagAdmin } from './helpers.js';
 
 const CUSTOMER = '99999999-0000-4000-8000-000000000001';
@@ -66,6 +68,19 @@ describe('etiquetas', () => {
     expect((await uc.tasks.get(actor(ANA), task.id)).tags.map((t) => [t.name, t.color])).toEqual([['Prioridad', 'warning']]);
     await expect(uc.organize.updateTag(tagAdmin(ANA), urgente.id, { name: 'cliente' })).rejects.toBeInstanceOf(ValidationError);
     expect(store.events('projects.tag.updated')[0]!.payload).toMatchObject({ name: 'Prioridad', previousName: 'Urgente', color: 'warning', previousColor: 'error' });
+  });
+
+  it('hay muchos colores de etiqueta (paleta `tag-*`), se guardan y se cambian; un color fuera de la lista o en hexadecimal se rechaza', async () => {
+    expect(TAG_COLORS.length).toBeGreaterThanOrEqual(16);
+    const { useCases: uc } = setup();
+    const tag = await uc.organize.createTag(tagAdmin(ANA), { name: 'Diseño', color: 'tag-violet' });
+    expect(tag.color).toBe('tag-violet');
+    expect((await uc.organize.updateTag(tagAdmin(ANA), tag.id, { color: 'tag-pink' })).color).toBe('tag-pink');
+    for (const color of TAG_COLORS) expect(tagSchema.safeParse({ name: 'x', color }).success).toBe(true);
+    for (const color of ['tag-nope', '#ff0000', 'red']) {
+      expect(tagSchema.safeParse({ name: 'x', color }).success).toBe(false);
+      expect(updateTagSchema.safeParse({ color }).success).toBe(false);
+    }
   });
 
   it('eliminar la quita de todas las tareas, dice en cuántas estaba y la lista cuenta el uso', async () => {

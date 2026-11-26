@@ -4,7 +4,7 @@ import { PERMISSION_TAG_MANAGE } from '../../domain/access.js';
 import { AppError, ForbiddenError, ValidationError } from '../../domain/errors.js';
 import { rankBetween } from '../../domain/rank.js';
 import type { Repositories } from '../../domain/repositories.js';
-import type { Actor, CustomField, FieldType, LinkEntity, ProjectColor, Tag, Task, TaskLink } from '../../domain/types.js';
+import type { Actor, CustomField, FieldType, LinkEntity, Tag, TagColor, Task, TaskLink } from '../../domain/types.js';
 import { assertTaskWritable, loadProject, loadTask, projectIdsOf } from '../access-context.js';
 import { recordActivity } from '../activity.js';
 import {
@@ -114,7 +114,7 @@ export class OrganizeUseCases {
   }
 
   /** Crea la etiqueta, o devuelve la que ya existe con ese nombre (sin distinguir mayúsculas): nadie termina con «Urgente» y «urgente». */
-  async createTag(actor: Actor, input: { name: string; color?: ProjectColor }): Promise<Tag> {
+  async createTag(actor: Actor, input: { name: string; color?: TagColor }): Promise<Tag> {
     this.assertCanManageTags(actor);
     const name = input.name.trim();
     if (!name || name.length > 60) throw new ValidationError([{ field: 'name', message: 'Entre 1 y 60 caracteres.' }]);
@@ -134,7 +134,7 @@ export class OrganizeUseCases {
   }
 
   /** Renombrar o cambiar el color: afecta a todas las tareas que la llevan. Un nombre que ya usa otra etiqueta se rechaza. */
-  async updateTag(actor: Actor, tagId: string, input: { name?: string; color?: ProjectColor }): Promise<Tag> {
+  async updateTag(actor: Actor, tagId: string, input: { name?: string; color?: TagColor }): Promise<Tag> {
     this.assertCanManageTags(actor);
     const name = input.name?.trim();
     if (name !== undefined && (!name || name.length > 60)) throw new ValidationError([{ field: 'name', message: 'Entre 1 y 60 caracteres.' }]);

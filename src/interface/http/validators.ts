@@ -9,6 +9,7 @@ import {
   LINK_ENTITIES,
   type LinkEntity,
   PROJECT_COLORS,
+  TAG_COLORS,
   PROJECT_HEALTH,
   type ProjectHealth,
   PROJECT_ROLES,
@@ -121,10 +122,10 @@ export const linkSchema = z.object({
   entityId: uuid,
   label: z.string().trim().min(1).max(200),
 });
-export const tagSchema = z.object({ name: z.string().trim().min(1).max(60), color: z.enum(PROJECT_COLORS).optional() });
+export const tagSchema = z.object({ name: z.string().trim().min(1).max(60), color: z.enum(TAG_COLORS).optional() });
 export const taskTagSchema = z.object({ tagId: uuid });
 export const updateTagSchema = z
-  .object({ name: z.string().trim().min(1).max(60).optional(), color: z.enum(PROJECT_COLORS).optional() })
+  .object({ name: z.string().trim().min(1).max(60).optional(), color: z.enum(TAG_COLORS).optional() })
   .refine((v) => v.name !== undefined || v.color !== undefined, { message: 'Indica el nombre o el color.' });
 const option = z.object({ id: uuid.nullable().optional(), label: z.string(), color: z.string().nullable().optional() });
 export const createFieldSchema = z.object({

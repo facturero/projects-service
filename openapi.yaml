@@ -660,7 +660,7 @@ paths:
               required: [name]
               properties:
                 name: { type: string, maxLength: 60 }
-                color: { type: string, enum: [primary, secondary, success, warning, error, info] }
+                color: { type: string, enum: [primary, secondary, success, warning, error, info, tag-red, tag-orange, tag-yellow, tag-lime, tag-green, tag-cyan, tag-violet, tag-purple, tag-pink, tag-brown, tag-grey], description: 'Colores del tema y la paleta `tag-*` (domain/types.ts, TAG_COLORS)' }
       responses:
         '201': { description: Etiqueta, content: { application/json: { schema: { $ref: '#/components/schemas/Tag' } } } }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -680,7 +680,7 @@ paths:
               type: object
               properties:
                 name: { type: string, maxLength: 60 }
-                color: { type: string, enum: [primary, secondary, success, warning, error, info] }
+                color: { type: string, enum: [primary, secondary, success, warning, error, info, tag-red, tag-orange, tag-yellow, tag-lime, tag-green, tag-cyan, tag-violet, tag-purple, tag-pink, tag-brown, tag-grey], description: 'Colores del tema y la paleta `tag-*` (domain/types.ts, TAG_COLORS)' }
       responses:
         '200': { description: Etiqueta cambiada, content: { application/json: { schema: { $ref: '#/components/schemas/Tag' } } } }
         '403': { $ref: '#/components/responses/Forbidden' }

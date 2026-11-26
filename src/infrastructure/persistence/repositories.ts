@@ -74,6 +74,7 @@ import type {
   ProjectBilling,
   ProjectInvoice,
   ProjectColor,
+  TagColor,
   ProjectMember,
   RunningTimer,
   Section,
@@ -837,7 +838,7 @@ const toTag = (m: TagModel): Tag => ({
   id: m.id,
   organizationId: m.organization_id,
   name: m.name,
-  color: m.color as ProjectColor,
+  color: m.color as TagColor,
   createdBy: m.created_by,
   createdAt: m.created_at,
 });
