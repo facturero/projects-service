@@ -41,7 +41,12 @@ export const TAG_COLORS = [
   'tag-brown',
   'tag-grey',
 ] as const;
-export type TagColor = (typeof TAG_COLORS)[number];
+/**
+ * O un color libre elegido en el selector (`#RRGGBB`, 2026-11-26: el dueño pidió un selector de color de verdad). Se guarda tal cual
+ * en minúsculas; el navegador ya lo ajusta para que se lea en claro y en oscuro antes de mandarlo.
+ */
+export type TagColor = (typeof TAG_COLORS)[number] | `#${string}`;
+export const HEX_COLOR = /^#[0-9a-f]{6}$/i;
 
 export interface Project {
   id: string;

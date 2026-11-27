@@ -70,17 +70,27 @@ describe('etiquetas', () => {
     expect(store.events('projects.tag.updated')[0]!.payload).toMatchObject({ name: 'Prioridad', previousName: 'Urgente', color: 'warning', previousColor: 'error' });
   });
 
-  it('hay muchos colores de etiqueta (paleta `tag-*`), se guardan y se cambian; un color fuera de la lista o en hexadecimal se rechaza', async () => {
+  it('hay muchos colores de etiqueta (paleta `tag-*`), se guardan y se cambian; un color fuera de la lista o mal escrito se rechaza', async () => {
     expect(TAG_COLORS.length).toBeGreaterThanOrEqual(16);
     const { useCases: uc } = setup();
     const tag = await uc.organize.createTag(tagAdmin(ANA), { name: 'Diseño', color: 'tag-violet' });
     expect(tag.color).toBe('tag-violet');
     expect((await uc.organize.updateTag(tagAdmin(ANA), tag.id, { color: 'tag-pink' })).color).toBe('tag-pink');
     for (const color of TAG_COLORS) expect(tagSchema.safeParse({ name: 'x', color }).success).toBe(true);
-    for (const color of ['tag-nope', '#ff0000', 'red']) {
+    for (const color of ['tag-nope', '#ff00', '#ff0000aa', 'rgb(1,2,3)', 'red']) {
       expect(tagSchema.safeParse({ name: 'x', color }).success).toBe(false);
       expect(updateTagSchema.safeParse({ color }).success).toBe(false);
     }
+  });
+
+  it('un color libre del selector (#RRGGBB) se acepta, se guarda en minúsculas y se puede volver a la paleta', async () => {
+    const parsed = tagSchema.parse({ name: 'Marca', color: '#7A3BE0' });
+    expect(parsed.color).toBe('#7a3be0');
+    expect(updateTagSchema.parse({ color: '#00AA88' }).color).toBe('#00aa88');
+    const { useCases: uc } = setup();
+    const tag = await uc.organize.createTag(tagAdmin(ANA), { name: parsed.name, color: parsed.color });
+    expect(tag.color).toBe('#7a3be0');
+    expect((await uc.organize.updateTag(tagAdmin(ANA), tag.id, { color: 'tag-green' })).color).toBe('tag-green');
   });
 
   it('eliminar la quita de todas las tareas, dice en cuántas estaba y la lista cuenta el uso', async () => {
