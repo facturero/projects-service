@@ -62,7 +62,8 @@ export const createSectionSchema = z.object({ name, ...position });
 export const renameSectionSchema = z.object({ name });
 export const moveSectionSchema = z.object(position);
 
-const title = z.string().trim().min(1, 'Obligatorio.').max(500, 'Máximo 500 caracteres.');
+// Los mensajes llegan tal cual a la persona (el front los añade a «La petición no es válida.»): que digan qué campo es.
+const title = z.string().trim().min(1, 'El título es obligatorio.').max(500, 'El título admite como máximo 500 caracteres.');
 
 // El documento de TipTap llega como objeto y lo valida el dominio (`richtext.ts`, lista blanca): aquí solo se exige que sea un objeto.
 const richDoc = z.record(z.string(), z.unknown());
